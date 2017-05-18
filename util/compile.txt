@@ -1,0 +1,7 @@
+C11/C++11 op	| prefix;prefix	| suffix;suffix
+Read relaxed	| NA		| NA
+Write relaxed	| NA		| NA
+Read acquire	| NA		| Acq
+Write release	| Rel		| NA
+Read seq_cst	| Sc		| Acq
+Write seq_cst	| Sc		| NA

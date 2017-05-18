@@ -1,0 +1,719 @@
+% Legend:
+% "/\" = AND
+% "\/" = OR
+% "~"  = NOT
+% "=>" = IMPLIES
+% "%"  = COMMENT
+%
+% Graph node = (instruction, (pipeline, stage number))
+% Graph edge = (node, node, label)
+%
+% "c" is predefined to be the core ID
+
+% About this microarchitecture:
+%
+% -"Barrier" is used to refer to an operation that orders other operations. It could be an acquire/release or a fence.
+% -The microarchitecture implements six types of acquire/release. Not all of them work as expected due to the NOT edges,
+%  and there may be other bugs. The six types are:
+%
+% THESE ARE Sc
+%
+%  -SC_CumRelease/Acquire - these are SC acquires and releases that become visible to all cores at the same time and preserve
+%  program order (including Rel->Acq). They are cumulative, so their releases will propagate writes that were previously read
+%  but are not "native" to the releasing core.
+%
+%  -SC_Release/Acquire - these are SC acquires and releases that become visible to all cores at the same time and preserve program
+%  order (including Rel->Acq). They are not cumulative, so their releases will not propagate writes that were previously read but
+%  are not "native" to the releasing core. Their allowed outcomes should be identical to SC_CumRelease/Acquire for programs that
+%  are properly synchronised.
+%
+% THESE ARE Rel AND Acq
+%
+%  -CppRelease/Acquire - these are C++-style "weak" acquires and releases. They preserve program order (except Rel->Acq), but do not
+%  become visible eagerly, only when the release is read, and that too by a corresponding C++ acquire or C++ SC read (i.e. SC_CumAcquire).
+%  These acquire/releases are cumulative.
+%
+%  -RCpc_Release/Acquire - these are RCpc-style "weak" acquires and releases. They preserve program order (except Rel->Acq). Releases
+%  make all writes before them (non-cumulatively) visible to *all* cores before the release is made visible to anyone. The release
+%  itself can become visible to different cores at different times. I believe this is how RCpc is intended to be implemented per
+%  Gharachorloo's 1990 paper.
+%
+%  -RCpc_Lazy_Release/Acquire - these are RCpc-style "weak" acquires and releases. They preserve program order (except Rel->Acq), but
+%  do not become visible eagerly, only when the release is read (not necessarily by an acquire, though this can be changed if necessary).
+%  These acquire/releases are not cumulative. These acquire/releases are identical to C++ acquire-releases, except that they aren't cumulative.
+%  This is how I originally thought RCpc was implemented when I read Gharachorloo90, but I need to go over his thesis to iron this out.
+%
+%  -RISCV_Acqrel - these are RISC-V's acquire+release operations. They can be either reads or writes (which is silly). They behave
+%  like SC_Release/Acquire but enforce ordering on both prior *and* later accesses (forbidding roach motel), and are not cumulative.
+%
+% -The microarchitecture also implements three types of fences: regular fences, weak-cumulative lwsync-style fences, and strong cumulative
+% sync-style fences. The lwsync-style fences do not enforce exactly the ordering that an lwsync does - they order whichever pairs of operations
+% the fence specification states they should (as the RISC-V spec allows), and their B group only extends to the accesses following the "lwsync"
+% in program order rather than any accesses that are indirectly sourced from the accesses after the fence in program order. So for example,
+% Figure 9 from Herding Cats won't work as expected with regard to the propagation of x. This is due to the scheme I came up with for
+% enforcing this (which is not in this file) being incompatible with NOT edges.
+
+StageName 0 "PCGen".
+StageName 1 "Fetch".
+StageName 2 "Decode".
+StageName 3 "Execute".
+StageName 4 "MemoryStage".
+StageName 5 "Commit".
+StageName 6 "StoreBuffer".
+StageName 7 "L1ViCLCreate".
+StageName 8 "L1ViCLExpire".
+StageName 9 "L2ViCLCreate".
+StageName 10 "L2ViCLExpire".
+StageName 11 "ObservationCore0".
+StageName 12 "ObservationCore1".
+StageName 13 "ObservationCore2".
+StageName 14 "ObservationCore3".
+StageName 15 "ObservationCore4".
+
+DefineMacro "STBFwd":
+  exists microop "w",
+    IsAnyWrite w /\ SameVirtualAddress w i /\ SameCore w i /\ SameData w i /\
+    AddEdges [((w, MemoryStage), (i,     MemoryStage), "STBFwd", "red");
+              ((i, MemoryStage), (w, L1ViCLCreate), "STBFwd", "purple")] /\
+  ~exists microop "w'",
+    IsAnyWrite w' /\ SameVirtualAddress w w' /\ SameCore w w' /\
+    ProgramOrder w w' /\ ProgramOrder w' i.
+
+DefineMacro "STBEmpty":
+forall microop "w", (
+  IsAnyWrite w => SameCore w i => SameVirtualAddress w i => ProgramOrder w i =>
+  AddEdge ((w, L1ViCLCreate), (i, MemoryStage), "STBEmpty", "purple")).
+
+DefineMacro "FindL1ViCL":
+exists microop "s", (
+  SamePhysicalAddress s i /\ SameData s i /\ SameCore s i /\
+  AddEdge ((s, L1ViCLCreate), (i,   MemoryStage  ), "rf", "red") /\
+  AddEdge ((i,   MemoryStage  ), (s, L1ViCLExpire), "rf", "brown")).
+
+% Note: It doesn't make sense for stale values to be able to be evicted to the L2...
+Axiom "WriteIsBeforeFinal":
+  forall microop "w",
+  OnCore c w => (
+    forall microop "w'",
+    IsAnyWrite w => IsAnyWrite w' => SamePhysicalAddress w w' =>
+       ~SameMicroop w w' => DataFromFinalStateAtPA w' =>
+    (AddEdge ((w, L1ViCLCreate), (w', L1ViCLCreate), "ws_final", "red")
+    % I think this should be an AND rather than an OR...but I'll leave it this way for now...
+    /\ ((NodeExists (w, (0, L2ViCLCreate)) \/ NodeExists (w', (0, L2ViCLExpire))) => 
+    (AddEdge ((w, L2ViCLCreate), (w', L2ViCLCreate), "ws_final", "red"))))).
+
+Axiom "Reads":
+forall microops "i",
+OnCore c i =>
+IsAnyRead i =>
+AddEdges [((i, PCGen),     (i, Fetch),     "path");
+          ((i, Fetch),     (i, Decode),      "path");
+          ((i, Decode),       (i, Execute),         "path");
+          ((i, Execute),         (i, MemoryStage), "path");
+          ((i, MemoryStage), (i, Commit),   "path")]
+/\
+(
+  KnownData i
+  =>
+  (
+    ExpandMacro STBFwd
+    \/
+    (
+      ExpandMacro STBEmpty /\ ExpandMacro FindL1ViCL
+    )
+  )
+).
+
+Axiom "Writes":
+forall microops "i",
+OnCore c i =>
+IsAnyWrite i =>
+AddEdges [((i, PCGen      ), (i, Fetch     ), "path");
+          ((i, Fetch      ), (i, Decode      ), "path");
+          ((i, Decode        ), (i, Execute         ), "path");
+          ((i, Execute          ), (i, MemoryStage ), "path");
+          ((i, MemoryStage  ), (i, Commit   ), "path");
+          ((i, MemoryStage    ), (i, StoreBuffer ), "path");
+          ((i, StoreBuffer  ), (i, L1ViCLCreate  ), "path");
+          ((i, L1ViCLCreate   ), (i, L1ViCLExpire  ), "path");
+          ((i, L1ViCLCreate   ), (i, ObservationCore0  ), "path")].
+
+DefineMacro "NonCumulativeBarrier":
+    FenceType WR_WR_Fence f \/
+    FenceType WR_W_Fence f \/
+    FenceType WR_R_Fence f \/
+    FenceType W_WR_Fence f \/
+    FenceType W_W_Fence f \/
+    FenceType W_R_Fence f \/
+    FenceType R_WR_Fence f \/
+    FenceType R_W_Fence f \/
+    FenceType R_R_Fence f.
+
+% I'm decreeing that a barrier which doesn't order writes before it in PO
+% cannot be a cumulative barrier, because it doesn't make sense. This could
+% change later.
+% These fences and releases have lwsync-like (i.e. C++-style, not strong) cumulativity.
+DefineMacro "CumulativeBarrier":
+    FenceType WR_WR_CumFence f \/
+    FenceType WR_W_CumFence f \/
+    FenceType WR_R_CumFence f \/
+    FenceType W_WR_CumFence f \/
+    FenceType W_W_CumFence f \/
+    FenceType W_R_CumFence f \/
+    (AccessType Rel f /\ IsAnyWrite f).
+
+% This macro is identical to CumulativeBarrier, and is here merely to make it
+% easier to write the lwsync cumulativity axioms.
+DefineMacro "CumulativeBarrier2":
+    FenceType WR_WR_CumFence o \/
+    FenceType WR_W_CumFence o \/
+    FenceType WR_R_CumFence o \/
+    FenceType W_WR_CumFence o \/
+    FenceType W_W_CumFence o \/
+    FenceType W_R_CumFence o \/
+    (AccessType Rel o /\ IsAnyWrite o).
+
+DefineMacro "StrongCumulativeBarrier":
+    FenceType WR_WR_SCumFence f \/
+    FenceType WR_W_SCumFence f \/
+    FenceType WR_R_SCumFence f \/
+    FenceType W_WR_SCumFence f \/
+    FenceType W_W_SCumFence f \/
+    FenceType W_R_SCumFence f \/
+    (AccessType Sc f /\ IsAnyWrite f).
+
+DefineMacro "LazyRelease":
+    (AccessType Rel f /\ IsAnyWrite f) \/
+    AccessType RCpc_Lazy_Release f.
+
+DefineMacro "EagerRelease":
+    (AccessType Sc r /\ IsAnyWrite r) \/
+    AccessType SC_Release r \/
+    AccessType RCpc_Release r \/
+    AccessType RISCV_Acqrel r.
+
+DefineMacro "AtomicRelease":
+    (AccessType Sc r /\ IsAnyWrite r) \/
+    AccessType SC_Release r \/
+    AccessType RISCV_Acqrel r.
+
+DefineMacro "AtomicAcquire":
+    (AccessType Sc a /\ IsAnyRead a) \/
+    AccessType SC_Acquire a \/
+    AccessType RISCV_Acqrel a.
+
+% TODO: Check these four sets...
+DefineMacro "BarrierOrdPrevReads":
+    FenceType WR_WR_Fence f \/
+    FenceType WR_W_Fence f \/
+    FenceType WR_R_Fence f \/
+    FenceType R_WR_Fence f \/
+    FenceType R_W_Fence f \/
+    FenceType R_R_Fence f \/
+    FenceType WR_WR_CumFence f \/
+    FenceType WR_W_CumFence f \/
+    FenceType WR_R_CumFence f \/
+    FenceType WR_WR_SCumFence f \/
+    FenceType WR_W_SCumFence f \/
+    FenceType WR_R_SCumFence f \/
+    (AccessType Sc f /\ IsAnyWrite f) \/
+    AccessType SC_Release f \/
+    (AccessType Rel f /\ IsAnyWrite f) \/
+    AccessType RCpc_Release f \/
+    AccessType RCpc_Lazy_Release f \/
+    AccessType RISCV_Acqrel f.
+
+DefineMacro "BarrierOrdPrevWrites":
+    FenceType WR_WR_Fence f \/
+    FenceType WR_W_Fence f \/
+    FenceType WR_R_Fence f \/
+    FenceType W_WR_Fence f \/
+    FenceType W_W_Fence f \/
+    FenceType W_R_Fence f \/
+    FenceType WR_WR_CumFence f \/
+    FenceType WR_W_CumFence f \/
+    FenceType WR_R_CumFence f \/
+    FenceType W_WR_CumFence f \/
+    FenceType W_W_CumFence f \/
+    FenceType W_R_CumFence f \/
+    FenceType WR_WR_SCumFence f \/
+    FenceType WR_W_SCumFence f \/
+    FenceType WR_R_SCumFence f \/
+    FenceType W_WR_SCumFence f \/
+    FenceType W_W_SCumFence f \/
+    FenceType W_R_SCumFence f \/
+    (AccessType Sc f /\ IsAnyWrite f) \/
+    AccessType SC_Release f \/
+    (AccessType Rel f /\ IsAnyWrite f) \/
+    AccessType RCpc_Release f \/
+    AccessType RCpc_Lazy_Release f \/
+    AccessType RISCV_Acqrel f.
+
+DefineMacro "BarrierOrdLaterReads":
+    FenceType WR_WR_Fence f \/
+    FenceType WR_R_Fence f \/
+    FenceType W_WR_Fence f \/
+    FenceType W_R_Fence f \/
+    FenceType R_WR_Fence f \/
+    FenceType R_R_Fence f \/
+    FenceType WR_WR_CumFence f \/
+    FenceType WR_R_CumFence f \/
+    FenceType W_WR_CumFence f \/
+    FenceType W_R_CumFence f \/
+    FenceType WR_WR_SCumFence f \/
+    FenceType WR_R_SCumFence f \/
+    FenceType W_WR_SCumFence f \/
+    FenceType W_R_SCumFence f \/
+    (AccessType Sc f /\ IsAnyRead f) \/
+    AccessType SC_Acquire f \/
+    (AccessType Acq f /\ IsAnyRead f) \/
+    AccessType RCpc_Acquire f \/
+    AccessType RCpc_Lazy_Acquire f \/
+    AccessType RISCV_Acqrel f.
+
+DefineMacro "BarrierOrdLaterWrites":
+    FenceType WR_WR_Fence f \/
+    FenceType WR_W_Fence f \/
+    FenceType W_WR_Fence f \/
+    FenceType W_W_Fence f \/
+    FenceType R_WR_Fence f \/
+    FenceType R_W_Fence f \/
+    FenceType WR_WR_CumFence f \/
+    FenceType WR_W_CumFence f \/
+    FenceType W_WR_CumFence f \/
+    FenceType W_W_CumFence f \/
+    FenceType WR_WR_SCumFence f \/
+    FenceType WR_W_SCumFence f \/
+    FenceType W_WR_SCumFence f \/
+    FenceType W_W_SCumFence f \/
+    (AccessType Sc f /\ IsAnyRead f) \/
+    AccessType SC_Acquire f \/
+    (AccessType Acq f /\ IsAnyRead f) \/
+    AccessType RCpc_Acquire f \/
+    AccessType RCpc_Lazy_Acquire f \/
+    AccessType RISCV_Acqrel f.
+
+Axiom "Fences":
+forall microops "f",
+OnCore c f =>
+IsAnyFence f => (
+AddEdges [((f, PCGen      ), (f, Fetch     ), "path");
+          ((f, Fetch      ), (f, Decode      ), "path");
+          ((f, Decode        ), (f, Execute         ), "path");
+          ((f, Execute          ), (f, Commit   ), "path")] /\
+% The observation logic is only necessary for cumulative and
+% strong cumulative fences.
+% This clause doesn't affect acqrels because of the IsAnyFence above.
+((ExpandMacro CumulativeBarrier \/ ExpandMacro StrongCumulativeBarrier) =>
+    AddEdge ((f, Commit), (f, ObservationCore0), "path"))).
+
+% All cores must observe writes before the barrier before they see something
+% after the barrier.
+DefineMacro "BarrierObservation":
+    AddEdge ((w, ObservationCore0), (f, ObservationCore0), "Observation", "orange") /\
+    AddEdge ((w, ObservationCore1), (f, ObservationCore1), "Observation", "orange") /\
+    AddEdge ((w, ObservationCore2), (f, ObservationCore2), "Observation", "orange") /\
+    AddEdge ((w, ObservationCore3), (f, ObservationCore3), "Observation", "orange") /\
+    AddEdge ((w, ObservationCore4), (f, ObservationCore4), "Observation", "orange").
+
+% This macro is the same as BarrierObservation and is here purely because we need
+% different uop ids in another case.
+DefineMacro "BarrierObservation2":
+    AddEdge ((w, ObservationCore0), (o, ObservationCore0), "Observation", "orange") /\
+    AddEdge ((w, ObservationCore1), (o, ObservationCore1), "Observation", "orange") /\
+    AddEdge ((w, ObservationCore2), (o, ObservationCore2), "Observation", "orange") /\
+    AddEdge ((w, ObservationCore3), (o, ObservationCore3), "Observation", "orange") /\
+    AddEdge ((w, ObservationCore4), (o, ObservationCore4), "Observation", "orange").
+
+% These barrier orderings are a bit debatable with regard to the specific stages
+% ordering is enforced between. I've erred on the side of strength here, but
+% maybe they could be weaker.
+Axiom "Barrier_PPO_Orderings":
+forall microops "f",
+OnCore c f =>
+(( ExpandMacro BarrierOrdPrevWrites =>
+  forall microops "w",
+  ((IsAnyWrite w /\ SameCore w f /\ ProgramOrder w f) =>
+     (AddEdge ((w, L1ViCLCreate), (f,     Execute ), "ppo", "orange") /\
+        % All writes before the fence in PO are observed before it too
+        ExpandMacro BarrierObservation
+     )
+  )
+ )
+/\ ( ExpandMacro BarrierOrdPrevReads =>
+  forall microops "r",
+  ((IsAnyRead r /\ SameCore r f /\ ProgramOrder r f) =>
+    AddEdge ((r, Commit), (f, Execute), "fence", "orange")))
+/\ (
+% Relax this if it causes behaviour to be too strong w.r.t st->ld forwarding.
+  ExpandMacro BarrierOrdLaterWrites =>
+  forall microops "w'",
+  ((IsAnyWrite w' /\ SameCore w' f /\ ProgramOrder f w') =>
+    % When enforcing ordering with respect to later accesses, the edge added depends
+    % on what type of operation the barrier is. The edge added must be between the
+    % "performance" of the barrier operation and the future access.
+    % Fences "perform" at the Execute stage.
+    % Acquires "perform" at the MemoryStage stage.
+    % Releases "perform" at the L1ViCLCreate stage.
+    % Note that the only writes that order later reads or writes are the RISCV_Acqrels.
+    ((IsAnyRead f => AddEdge ((f, MemoryStage), (w', Execute), "acquire", "orange")) /\
+     (IsAnyFence f => AddEdge ((f, Execute), (w', Execute), "fence", "orange")) /\
+     (IsAnyWrite f => AddEdge ((f, L1ViCLCreate), (w', Execute), "fence", "orange"))
+    )))
+/\ (
+  ExpandMacro BarrierOrdLaterReads =>
+  forall microops "r'",
+  ((IsAnyRead r' /\ SameCore r' f /\ ProgramOrder f r') =>
+    % When enforcing ordering with respect to later accesses, the edge added depends
+    % on what type of operation the barrier is. The edge added must be between the
+    % "performance" of the barrier operation and the future access.
+    % Fences "perform" at the Execute stage.
+    % Acquires "perform" at the MemoryStage stage.
+    % Releases "perform" at the L1ViCLCreate stage.
+    % Note that the only writes that order later reads or writes are the RISCV_Acqrels.
+    ((IsAnyRead f => AddEdge ((f, MemoryStage), (r', Execute), "acquire", "orange")) /\
+     (IsAnyFence f => AddEdge ((f, Execute), (r', Execute), "fence", "orange")) /\
+     (IsAnyWrite f => AddEdge ((f, L1ViCLCreate), (r', Execute), "fence", "orange"))
+    )))).
+
+% Note: A core can't read directly from the L2 - it has to read its L1.
+% Thus, torching all the stale values from L1s should be enough to
+% take away their visibility to all cores.
+% I'll go with it being enough for now - if it needs to change,
+% the cumulativity constraints should also check for L2 ViCLs being sourced before
+% the fence's Execute stage and make them expire before the fence's Execute stage.
+
+% Strong cumulativity: any write observed by a core before a strong cumulative fence
+% must be observed by all cores before the fence reaches the Execute stage. This axiom
+% does not apply to releases thanks to the IsAnyFence.
+Axiom "StrongCumulativity":
+forall microops "i1",
+forall microops "f",
+IsAnyWrite i1 /\ IsAnyFence f /\ ExpandMacro StrongCumulativeBarrier =>
+    (forall microops "i3",
+        (NodeExists (i3, L1ViCLCreate) \/ NodeExists(i3, L1ViCLExpire)) =>
+            (EdgeExists ((i3, L1ViCLCreate), (i1, L1ViCLCreate), "") /\
+            SamePhysicalAddress i1 i3 /\ OnCore c i3 /\
+            EdgeExists ((i1, ObservationCore0 + c), (f, ObservationCore0 + c), "") =>
+               AddEdge ((i3, L1ViCLExpire), (f, Execute), "strong_cumulativity"))).
+
+% Any writes observed before an eager release must be observed by *all* cores
+% before the release. Note that this applies to both cumulative and non-cumulative
+% eager releases - the non-cumulative ones will just only have "observed" the
+% writes before them in PO.
+% This axiom is similar to the above StrongCumulativity axiom.
+Axiom "EagerReleases":
+forall microops "i1",
+forall microops "r",
+IsAnyWrite i1 /\ ExpandMacro EagerRelease =>
+    (forall microops "i3",
+        (NodeExists (i3, L1ViCLCreate) \/ NodeExists(i3, L1ViCLExpire)) =>
+            (EdgeExists ((i3, L1ViCLCreate), (i1, L1ViCLCreate), "") /\
+            SamePhysicalAddress i1 i3 /\ OnCore c i3 /\
+            % The ProgramOrder clause is necessary if this is a read which is an eager release, which can
+            % happen in RISC-V. Such reads don't have observation nodes. Thankfully, RISC-V has no mention
+            % of cumulativity, so we can just OR in a ProgramOrder clause and be done with it.
+            ((IsAnyWrite r /\ EdgeExists ((i1, ObservationCore0 + c), (r, ObservationCore0 + c), "")) \/ ProgramOrder i1 r) =>
+               AddEdge ((i3, L1ViCLExpire), (r, Execute), "eager_release"))).
+
+% An atomic release (in other words, an SC release) is observed at the same time
+% by all cores. This is essentially enforcing eager coherence for just this write.
+Axiom "AtomicReleases":
+forall microops "r",
+% The IsAnyWrite is necessary because reads can be releases as well in RISC-V,
+% and they won't have L1ViCLCreate nodes. Reads are automatically observed at
+% the same time by all cores (let's just sweep load atomicity under the rug for now)
+% so one doesn't need to do anything in the read-release case.
+IsAnyWrite r /\ ExpandMacro AtomicRelease =>
+    (forall microops "i3",
+        (NodeExists (i3, L1ViCLCreate) \/ NodeExists(i3, L1ViCLExpire)) =>
+            (EdgeExists ((i3, L1ViCLCreate), (r, L1ViCLCreate), "") /\
+            SamePhysicalAddress r i3 =>
+               AddEdge ((i3, L1ViCLExpire), (r, Execute), "atomic_release"))).
+
+% Rel->Acq ordering is the only ordering that needs to be explicitly enforced for the RCsc case -
+% all others are automatically taken care of by the Barrier_PPO_Orderings axiom.
+% This ordering is preserved by SC acqrels. It is not preserved by C++ acqrels as far as I know.
+% Note that RISCV_Acqrels don't need this axiom, as they enforce ordering for *all* future reads,
+% including acquires, in the Barrier_PPO_Orderings axiom.
+Axiom "RelAcqOrdering":
+forall microops "r",
+IsAnyWrite r /\ ExpandMacro AtomicRelease =>
+    forall microops "a",
+    ExpandMacro AtomicAcquire =>
+        ProgramOrder r a =>
+            AddEdge ((r, L1ViCLCreate), (a,     Execute ), "rel_acq", "orange").
+
+% There are two ways to ensure RMW atomicity (this uses the second):
+% - Simply require the write of the RMW to be atomic. This means it's impossible for the RMW
+%   to propagate to different cores at different times, but the axiom is much easier.
+% - Flush all prior writes to the RMW addr to the cache (for uniprocessor ordering purposes,
+%   since the RMW read must read from the cache), force the read of the RMW
+%   to read from the cache (note that you get this for free because any STBFwd cases
+%   will generate a cycle because of the prior flushing required), and have the ~exists
+%   condition specify that no other write must create its ViCL between the *L1ViCLCreate*
+%   of the read and the L1ViCLCreate of the RMW's write. This is very close if not identical
+%   to how an LR/SC pair would work.
+%
+%   Note that this disallows the use of St->Ld forwarding to satisfy the read of the RMW,
+%   which will make cases where your lock release is a regular store and your lock acquire
+%   is an RMW have lower performance. But rel-acq ordering would prevent that in the RCsc-like
+%   cases anyway. Will this forbid any outcomes that it shouldn't? I can't think of any...but
+%   I'm not 100% sure.
+Axiom "RMW":
+forall microop "w",
+IsAnyWrite w => AccessType RMW w =>
+(exists microop "r", ConsecutiveMicroops r w /\ IsAnyRead r /\ AccessType RMW r /\
+    (forall microop "w1",
+        ProgramOrder w1 w /\ SamePhysicalAddress w w1 =>
+            AddEdge ((w1, L1ViCLCreate), (r, MemoryStage), "rmw_prior", "orange")) /\
+  ~exists microop "w'", IsAnyWrite w' /\ SamePhysicalAddress w w' /\
+    EdgesExist [((r ,   L1ViCLCreate  ), (w', L1ViCLCreate), "");
+                ((w', L1ViCLCreate), (w , L1ViCLCreate), "")]).
+
+Axiom "PO/Fetch":
+forall microops "i1",
+forall microops "i2",
+(OnCore c i1 /\ OnCore c i2 /\ ProgramOrder i1 i2) =>
+AddEdge ((i1, PCGen), (i2, PCGen), "PO", "blue").
+
+Axiom "Memory_stage_is_in-order":
+forall microops "i1",
+forall microops "i2",
+% Remove the IsAnyRead /\ IsAnyRead clause to fix the load-load reordering bug...
+OnCore c i1 => OnCore c i2 =>
+SamePhysicalAddress i1 i2 => ProgramOrder i1 i2 =>
+NodesExist [(i1, MemoryStage); (i2, MemoryStage)] =>
+AddEdge ((i1, MemoryStage), (i2, MemoryStage), "PPO", "darkgreen").
+
+Axiom "Writeback_stage_is_in-order":
+forall microops "i1",
+forall microops "i2",
+OnCore c i1 => OnCore c i2 =>
+EdgeExists ((i1, PCGen), (i2, PCGen), "") =>
+NodesExist [(i1, Commit);  (i2, Commit)] =>
+AddEdge ((i1, Commit), (i2, Commit), "PPO", "darkgreen").
+
+Axiom "Addr_Dependencies":
+forall microops "i1",
+forall microops "i2",
+(HasDependency addr i1 i2) =>
+  (AddEdge ((i1, MemoryStage), (i2, Execute), "addr_dependency")).
+
+Axiom "Data_Dependencies":
+forall microops "i1",
+forall microops "i2",
+(HasDependency data i1 i2) =>
+  (AddEdge ((i1, MemoryStage), (i2, MemoryStage), "data_dependency")).
+
+%I'm choosing to just model the ctrlisb dependency with a single
+%edge and not explicitly show the branch and isb instructions.
+Axiom "CtrlIsb_Read_Read_Dependencies":
+forall microops "i1",
+forall microops "i2",
+OnCore c i1 => OnCore c i2 =>
+(HasDependency ctrlisb i1 i2 /\ IsAnyRead i1 /\ IsAnyRead i2) =>
+  (AddEdge ((i1, MemoryStage), (i2, MemoryStage), "ctrlisb")).
+
+Axiom "Ctrl_Dependencies_Read_Write":
+forall microops "i1",
+forall microops "i2",
+OnCore c i1 => OnCore c i2 =>
+((HasDependency ctrl i1 i2 \/ HasDependency ctrlisb i1 i2) /\ IsAnyRead i1 /\ IsAnyWrite i2) =>
+((NodeExists (i2, L1ViCLCreate)) =>
+  (AddEdge ((i1, MemoryStage), (i2, L1ViCLCreate), "dependency"))).
+
+Axiom "STB_FIFO":
+forall microops "i1",
+forall microops "i2",
+OnCore c i1 => OnCore c i2 =>
+EdgeExists ((i1, Commit), (i2, Commit), "") =>
+SamePhysicalAddress i1 i2 =>
+NodesExist [(i1, StoreBuffer); (i2, StoreBuffer)] =>
+AddEdge ((i1, StoreBuffer), (i2, StoreBuffer), "PPO", "darkgreen").
+
+Axiom "STB_OneAtATime":
+forall microops "i1",
+forall microops "i2",
+OnCore c i1 => OnCore c i2 => IsAnyWrite i1 => IsAnyWrite i2 =>
+SamePhysicalAddress i1 i2 => ProgramOrder i1 i2 =>
+NodesExist [(i1, L1ViCLCreate); (i2, StoreBuffer)] =>
+AddEdge ((i1, L1ViCLCreate), (i2, StoreBuffer), "PPO", "darkgreen").
+
+DefineMacro "L2ViCLSourceInitial":
+  % Read occurs before all writes to same PA & Data
+  DataFromInitialStateAtPA i /\
+  forall microop "w", (
+    IsAnyWrite w => SamePhysicalAddress w i => ~SameMicroop i w =>
+    % This'll ensure that the initial read has an L2 ViCL as well...
+    AddEdges [((i, L1ViCLCreate), (w, L1ViCLCreate), "fr_SourcedBefore", "red");
+              ((i, (0, L2ViCLCreate)), (w, L1ViCLCreate), "fr_SourcedBefore", "red")]).
+
+DefineMacro "SourcingObservation":
+    % If reading from a write, the write must be observed by any cumulative barriers succeeding
+    % the read in program order, except those that don't order previous reads.
+    % If a cumulative fence does not order previous reads, then it will not observe any writes before it
+    % except the ones before it in program order.
+    % Note: If you're reading from a read ViCL, that read will ensure any cumulative effects.
+    IsAnyWrite i' =>
+    forall microop "f",
+        ((ExpandMacro CumulativeBarrier \/ ExpandMacro StrongCumulativeBarrier) /\ ProgramOrder i f /\ ExpandMacro BarrierOrdPrevReads) =>
+            % Note: I can't reuse BarrierObservation because of the difference in uop names.
+            (AddEdge ((i', ObservationCore0), (f, ObservationCore0), "Observation", "orange") /\
+            AddEdge ((i', ObservationCore1), (f, ObservationCore1), "Observation", "orange") /\
+            AddEdge ((i', ObservationCore2), (f, ObservationCore2), "Observation", "orange") /\
+            AddEdge ((i', ObservationCore3), (f, ObservationCore3), "Observation", "orange") /\
+            AddEdge ((i', ObservationCore4), (f, ObservationCore4), "Observation", "orange")).
+
+% Note: These are the operations intended to implement C++ acquire reads and
+% SC reads in a direct-to-C++ mapping, as the Cpp* mappings intend to.
+% They do *not* include SC_Acquires, but this can be easily changed if necessary.
+DefineMacro "CanSyncWithCppRel":
+    (AccessType Acq i /\ IsAnyRead i) \/
+    (AccessType Sc i /\ IsAnyRead i).
+
+DefineMacro "WeakCumulativity":
+    % The following constraint deals with lwsync-like or C++-like weak cumulativity.
+    (IsAnyWrite i' /\ ~SameCore i i') =>
+      forall microop "f",
+          (((IsAnyFence f /\ ExpandMacro CumulativeBarrier /\ ProgramOrder f i') \/
+            % This next line is a slight hack to handle the release case, but I believe it'll work.
+            % C++ cumulativity only holds when the release is read by an acquire. Likewise, RCpc_Lazy_Release
+            % operations only enforce cumulativity when read by RCpc_Lazy_Acquires.
+            (ExpandMacro LazyRelease /\ SameMicroop f i' /\
+             % We know that i' is a write here thanks to the beginning of this macro; we don't need to check it.
+             (AccessType Rel i' => ExpandMacro CanSyncWithCppRel) /\
+             (AccessType RCpc_Lazy_Release i' => AccessType RCpc_Lazy_Acquire i)
+            )) =>
+              forall microop "w",
+                  % All writes observed before the fence before the write (or before the release in the release case)
+                  % must be propagated to the reading core before the read.
+                  ((IsAnyWrite w /\ OnCore c i /\ EdgeExists ((w, ObservationCore0 + c), (f, ObservationCore0 + c), "")) =>
+                     forall microop "o",
+                         (((SameCore i o /\ (NodeExists(o, L1ViCLCreate) \/ NodeExists(o, L1ViCLExpire))) =>
+                             (EdgeExists((o, L1ViCLCreate), (w, L1ViCLCreate), "") /\ SamePhysicalAddress o w) =>
+                                 AddEdge((o, L1ViCLExpire), (i, MemoryStage), "cumulativity")
+                          ) /\
+                          % And they must be observed by any cumulative barriers after the read in program order.
+                          ((IsAnyFence o /\ ExpandMacro CumulativeBarrier2 /\ ProgramOrder i o) =>
+                              ExpandMacro BarrierObservation2
+                          )
+                         )
+                  )
+          ).
+
+% Cumulativity effects should be set when sourcing because it is only here that a
+% constraint can ensure that a given read is in fact reading from a
+% certain write. In other cases the happens-before relationship between
+% the read and the write may be due to some other factor.
+% Side note: If we attached meaning to edge labels (i.e. could tell when an edge was
+% an rf edge), one might be able to the state the cumulativity part of these
+% constraints separately. 
+DefineMacro "L1ViCLSource":
+  exists microop "i'", (
+    SamePhysicalAddress i i' /\ SameData i i' /\
+    ((~SameMicroop i i' /\ AddEdge ((i', L1ViCLCreate), (i, L1ViCLCreate), "src", "blue")) \/
+    AddEdge ((i', (0, L2ViCLCreate)), (i, L1ViCLCreate), "src", "blue")) /\
+    (~exists microop "i''",
+      SamePhysicalAddress i i'' /\ IsAnyWrite i'' /\
+      EdgesExist [((i' , L1ViCLCreate), (i'', L1ViCLCreate), "between");
+                  ((i'', L1ViCLCreate), (i  , L1ViCLCreate), "between")]) /\
+    ExpandMacro SourcingObservation /\
+    ExpandMacro WeakCumulativity
+  ).
+
+% The L1ViCLs and L2ViCLs axioms should probably be combined in the future to
+% avoid issues with the overlap between L2ViCLSourceInitial being called in both
+% cases. Such issues may only arise when there's a write with a value equal to
+% the initial state in the test case.
+Axiom "L1ViCLs":
+  forall microop "i", (
+    OnCore c i => IsAnyRead i =>
+    (NodeExists (i, L1ViCLCreate) \/ NodeExists (i, L1ViCLExpire)) => (
+      AddEdge ((i, L1ViCLCreate), (i, L1ViCLExpire), "path") /\
+      (ExpandMacro L1ViCLSource \/ ExpandMacro L2ViCLSourceInitial))).
+
+Axiom "L2ViCLPath_1":
+  forall microop "i", (
+    OnCore c i => IsAnyWrite i =>
+    (NodeExists (i, (0, L2ViCLCreate)) \/ NodeExists (i, (0, L2ViCLExpire))) =>
+      AddEdges [((i, L1ViCLCreate), (i, (0, L2ViCLCreate)), "path");
+                ((i, (0, L2ViCLCreate)), (i, (0, L2ViCLExpire)), "path")]).
+
+Axiom "L2ViCLPath_2":
+  forall microop "i", (
+    OnCore c i => IsAnyRead i =>
+    (NodeExists (i, (0, L2ViCLCreate)) \/ NodeExists (i, (0, L2ViCLExpire))) =>
+      AddEdges [((i, (0, L2ViCLCreate)), (i, L1ViCLCreate), "path");
+                ((i, (0, L2ViCLCreate)), (i, (0, L2ViCLExpire)), "path")]).
+
+% The ~exists part may be a bit too strong...or it may not be.
+% It's basically saying: if an L2 ViCL is sourcing another L2 ViCL, then it had
+% better still be the most recent value written to that address: i.e. no other
+% core should have written to its L1 for that address since then.
+DefineMacro "L2ViCLSource":
+  exists microop "i'", (
+    SamePhysicalAddress i i' /\ ~SameMicroop i i' /\ SameData i i' /\
+    AddEdge ((i', (0, L2ViCLCreate)), (i , (0, L2ViCLCreate)), "src", "blue") /\
+    (~exists microop "i''", (
+      SamePhysicalAddress i i'' /\ IsAnyWrite i'' /\
+      EdgesExist [((i' , (0, L2ViCLCreate)), (i'', L1ViCLCreate), "between");
+                  ((i'', L1ViCLCreate), (i  , (0, L2ViCLCreate)), "between")])) /\
+    ExpandMacro SourcingObservation /\
+    ExpandMacro WeakCumulativity
+  ).
+
+% There's a bit of overlap between L2ViCLPath and this one, but leave it be for now...
+Axiom "L2ViCLs":
+  forall microop "i", (
+    OnCore c i => IsAnyRead i =>
+    (NodeExists (i, (0, L2ViCLCreate)) \/ NodeExists (i, (0, L2ViCLExpire))) => (
+      AddEdge ((i, (0, L2ViCLCreate)), (i, (0, L2ViCLExpire)), "path") /\
+      (ExpandMacro L2ViCLSourceInitial \/ ExpandMacro L2ViCLSource))).
+
+% L2-to-L2 SW edges will come about by transitivity...
+Axiom "WriteSerialization":
+forall microops "i1", forall microops "i2",
+( ~(SameMicroop i1 i2) /\ IsAnyWrite i1 /\ IsAnyWrite i2 /\ SamePhysicalAddress i1 i2) =>
+((AddEdge ((i1, L1ViCLCreate), (i2, L1ViCLCreate), "SW", "purple") /\
+((NodeExists (i1, (0, L2ViCLCreate)) \/ NodeExists (i1, (0, L2ViCLExpire))) =>
+    AddEdge ((i1, (0, L2ViCLCreate)), (i2, L1ViCLCreate), "SW", "purple"))) \/
+ (AddEdge ((i2, L1ViCLCreate), (i1, L1ViCLCreate), "SW", "purple") /\
+((NodeExists (i2, (0, L2ViCLCreate)) \/ NodeExists (i2, (0, L2ViCLExpire))) =>
+    AddEdge ((i2, (0, L2ViCLCreate)), (i1, L1ViCLCreate), "SW", "purple")))).
+
+Axiom "SourcedBeforeOrAfter":
+SameCore 0 c =>
+forall microops "i1",
+IsAnyRead i1 =>
+(NodeExists (i1, L1ViCLCreate) \/ NodeExists (i1, L1ViCLExpire)) =>
+forall microops "i2",
+IsAnyWrite i2 =>
+((NodeExists (i2, L1ViCLCreate) \/ NodeExists (i2, L1ViCLExpire)) =>
+  (~SameMicroop i1 i2) => SamePhysicalAddress i1 i2 => (
+    (AddEdge ((i1, L1ViCLCreate), (i2, L1ViCLCreate), "SourcedBefore", "purple")) \/
+    (AddEdge ((i2, L1ViCLCreate), (i1, L1ViCLCreate), "SourcedAfter", "purple")))) /\
+((NodeExists (i1, (0, L2ViCLCreate)) \/ NodeExists (i1, (0, L2ViCLExpire))) =>
+  (~SameMicroop i1 i2) => SamePhysicalAddress i1 i2 => (
+    (AddEdge ((i1, L1ViCLCreate), (i2, L1ViCLCreate), "SourcedBefore", "purple")) \/
+    (AddEdge ((i2, L1ViCLCreate), (i1, (0, L2ViCLCreate)), "SourcedAfter", "purple")))).
+
+Axiom "L1ViCLNoDups":
+SameCore 0 c =>
+forall microop "i1", (
+  (NodeExists (i1, L1ViCLCreate) \/ NodeExists (i1, L1ViCLExpire)) =>
+  forall microop "i2", (
+    (~SameMicroop i1 i2) => SameCore i1 i2 => SamePhysicalAddress i1 i2 =>
+    (NodeExists (i2, L1ViCLCreate) \/ NodeExists (i2, L1ViCLExpire)) => (
+      AddEdge ((i1, L1ViCLExpire), (i2, L1ViCLCreate), "NoDups", "orange") \/
+      AddEdge ((i2, L1ViCLExpire), (i1, L1ViCLCreate), "NoDups", "orange")))).
+
+Axiom "L2ViCLNoDups":
+SameCore 0 c =>
+forall microop "i1", (
+  (NodeExists (i1, (0, L2ViCLCreate)) \/ NodeExists (i1, (0, L2ViCLExpire))) =>
+  forall microop "i2", (
+    (~SameMicroop i1 i2) => SamePhysicalAddress i1 i2 =>
+    (NodeExists (i2, (0, L2ViCLCreate)) \/ NodeExists (i2, (0, L2ViCLExpire))) => (
+      AddEdge ((i1, (0, L2ViCLExpire)), (i2, (0, L2ViCLCreate)), "NoDups", "orange") \/
+      AddEdge ((i2, (0, L2ViCLExpire)), (i1, (0, L2ViCLCreate)), "NoDups", "orange")))).
