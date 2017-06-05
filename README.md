@@ -58,11 +58,11 @@ we will try to help out as best we can.
 ### Prerequisites
 
 TriCheck leverages the COATCheck which is derived from PipeCheck and CCICheck.
-COATCheck must be build prior to running TriCheck. See the build instructions at:
+COATCheck must be built prior to running TriCheck. See the build instructions at:
 
 http://github.com/daniellustig/coatcheck
 
-TriCheck also leverages Herd devloped by Jade Alglave and Luc Maranget. See build
+TriCheck also leverages Herd, devloped by Jade Alglave and Luc Maranget. See build
 instructions at:
 
 https://github.com/herd/herdtools
