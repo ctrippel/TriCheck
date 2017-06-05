@@ -20,6 +20,8 @@ def genISATests(ctests_dir, TriCheck_dir, herd_dir):
     print "Running cpp_herd_to_pipecheck.py for " + dir + " tests..."
     for file in os.listdir(ctests_dir + dir):
       if (fnmatch.fnmatch(file, '*.litmus')):
+
+        #print herd_dir + "/cpp_herd_to_pipecheck.py " + herd_dir + "/c11_partialSC.cat " + ctests_dir + dir + "/" + file + " /dev/null " + herd_dir + "/sc.cat all"
         os.system(herd_dir + "/cpp_herd_to_pipecheck.py " + herd_dir + "/c11_partialSC.cat " + ctests_dir + dir + "/" + file + " /dev/null " + herd_dir + "/sc.cat all");
  
     subprocess.call("for i in ../tests/ctests/" + dir + "/*.test; do mv ${i} ../tests/ctests/" + dir + "/pipecheck/; done", stderr=subprocess.STDOUT, shell=True);

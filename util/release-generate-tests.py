@@ -32,7 +32,7 @@ def main(argv):
                  \n\t-r or --rel \t\t\t\t Generate tests that use C11 \"release\" write memory order primitives \
                  \n\t-s or --sc \t\t\t\t Generate tests that use C11 \"seq_cst\" read/write memory order primitives \
                  \n\t-A or --all \t\t\t\t Generate tests that use all C11 read/write memory order primitives\
-                 \n\t-C or --atomics \t\t\t Generate tests that use fence mappings in compile.txt \
+                 \n\t-C or --atomics \t\t\t Generate tests that use ISA atomics \
                  \n\t-f or --fences \t\t\t\t Generate tests that use fence mappings in compile.txt \
                  \n\t-m or --mixed \t\t\t\t Generate tests that use a combination of atomics and fence mappings in compile.txt";
 

@@ -7,15 +7,49 @@ import tempfile
 import re
 import json
 import gzip
-import sys, getopt
 
 rw_re = '([RW])(\(.+?\))?([^\*]+)(\*?)=(.+?)'
+#rw_re = '([RW])\((.+?)\)([^\*]+)(\*?)=(.+?)'
+#rw_re2 = '([RW])([^\*]+)(\*?)=(.+?)'
 node_re = 'eiid([0-9]+) \[label="[a-z0-9]+: (.*)\\\\lproc:([0-9]+) poi:([0-9])'
 final_node_re = '^finaleiid([0-9]+)'
 edge_re = '^eiid([0-9]+) -> eiid([0-9]+) .*label="([^"]*)"'
+#init_re = 'initeiid([0-9]+)'
+#init_re = '^eiid([0-9]+).*\\\\lInit.*'
 final_re = '([^ (]+) *= *([^ \\\/\)$]*)'
 init_re = '^eiid([0-9]+).*[WR](.).*\\\\lInit.*'
 
+#Mappings = {"IBM370"	: 	{
+#				 "Read"	:	{"Rlx": "", "Acq": "", "Sc": ""},
+#				 "Write":	{"Rlx": "", "Rel": "", "Sc": ""},
+#				 "Fence":	{"Acq": "", "Rel": "", "Sc": ""}
+#				}
+#	    "IBM370"    :       {
+#                                 "Read" :       {"Rlx": "", "Acq": "", "Sc": ""},
+#                                 "Write":       {"Rlx": "", "Rel": "", "Sc": ""},
+#                                 "Fence":       {"Acq": "", "Rel": "", "Sc": ""}
+#                                }
+#	    "IBM370"    :       {
+#                                 "Read" :       {"Rlx": "", "Acq": "", "Sc": ""},
+#                                 "Write":       {"Rlx": "", "Rel": "", "Sc": ""},
+#                                 "Fence":       {"Acq": "", "Rel": "", "Sc": ""}
+#                                }
+#	    "IBM370"    :       {
+#                                 "Read" :       {"Rlx": "", "Acq": "", "Sc": ""},
+#                                 "Write":       {"Rlx": "", "Rel": "", "Sc": ""},
+#                                 "Fence":       {"Acq": "", "Rel": "", "Sc": ""}
+#                                }
+#            "TSO"	: 	{"Rlx": "", "Acq": "", "Rel": "", "AR": "", "Sc": ""},
+#            "PSO"	: 	{"Rlx": "", "Acq": "", "Rel": "", "AR": "", "Sc": ""},
+#            "PC"	: 	{"Rlx": "", "Acq": "", "Rel": "", "AR": "", "Sc": ""},
+#            "RMO"	: 	{"Rlx": "", "Acq": "", "Rel": "", "AR": "", "Sc": ""},
+#            "ARM"	:	{"Rlx": "", "Acq": "", "Rel": "", "AR": "", "Sc": ""},
+#            "IBM370+A"	:  	{"Rlx": "", "Acq": "", "Rel": "", "AR": "", "Sc": ""},
+#            "TSO+A"	:  	{"Rlx": "", "Acq": "", "Rel": "", "AR": "", "Sc": ""},
+#            "PSO+A"	:  	{"Rlx": "", "Acq": "", "Rel": "", "AR": "", "Sc": ""},
+#            "PC+A"	:  	{"Rlx": "", "Acq": "", "Rel": "", "AR": "", "Sc": ""},
+#            "RMO+A"	:  	{"Rlx": "", "Acq": "", "Rel": "", "AR": "", "Sc": ""},
+#            "ARM+A" 	: 	{"Rlx": "", "Acq": "", "Rel": "", "AR": "", "Sc": ""}};
 
 def Dirn(d, t):
     op = ""
@@ -135,7 +169,7 @@ class Node:
             match = re.search("\((.+?)\)", a)
             #self.atype  = a
             self.atype  = match.group(1)
-           
+
 class Edge:
     def __init__(self, src=None, dst=None, lbl=None):
         self.src = src
@@ -426,7 +460,7 @@ try:
     sc_model = sys.argv[4]
     assert sys.argv[5] in ["all", "po", "power"]
 except IndexError:
-    sys.stderr.write("Usage: python cpp_herd_to_pipecheck.py <cats model> <filename> <all | po>\n")
+    sys.stderr.write("Usage: python herd_to_pipecheck.py <cats model> <filename> <all | po>\n")
     sys.exit(1)
 
 def CheckIfPermitted(model, filename, unobserved, sc_model):

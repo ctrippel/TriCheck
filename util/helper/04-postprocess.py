@@ -119,7 +119,8 @@ def applyFenceMappings(ctests_dir):
                 fence_type = match.group(3);
                 atomic_type = match.group(5);
 
-                line = re.sub(mem_type + "(\s+)" + fence_type + "(\s+)" + atomic_type, mem_type + " Rlx", line);
+                line = re.sub(mem_type + "(\s+)" + fence_type + "(\s+)" + atomic_type, mem_type + " ", line);
+                #line = re.sub(mem_type + "(\s+)" + fence_type + "(\s+)" + atomic_type, mem_type + " Rlx", line);
                 for pre in fenceMappingsPrefix[mem_type + " " + fence_type]:
                   prefix += str(new_ind) + " " + core_ind + " " + xtra1_ind + " " + xtra2_ind +  " (Fence " + pre + " )\n"
 

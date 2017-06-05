@@ -24,14 +24,14 @@ def genStats(results_dir, models_list):
           for i in (t.strip()).split("\n"):
             fp_Strict.write(uarch + '.' + test_set + ': ' + i + "\n")
         except:
-          continue;
+          done = True
 
         try: 
           t = subprocess.check_output('cat ' + results_dir + '/'  + uarch + '/' + test_set + '/1/*/stdout | grep BUG', stderr=subprocess.STDOUT, shell=True)
           for i in (t.strip()).split("\n"):
             fp_BUG.write(uarch + '.' + test_set + ': ' + i + "\n")
         except:
-          continue;
+          done = True
 
   fp_Strict.close()
   fp_BUG.close()
@@ -41,9 +41,9 @@ def main(argv):
   usage_string = "usage: \t release-stats.py [arguments] \
                  \n\nDescription: \tGenerate Bug and Strict log files. \
                  \n\nArguments: \
-                 \n\t-h or --help \t\t\t\t Display this help and exit \
-                 \n\t-r or --results <results_dir> \t\t Assumed to be $TRICHECK_HOME/util/results \
-                 \n\t-m or --models <uarch0,uarch1,...,uarchN> \t\t Assumed to be all uarches with directories in $TRICHECK_HOME/util/results";
+                 \n\t-h or --help \t\t\t\t\t Display this help and exit \
+                 \n\t-r or --results <results_dir> \t\t\t Assumed to be $TRICHECK_HOME/util/results \
+                 \n\t-m or --models <uarch0,uarch1,...,uarchN> \t Assumed to be all uarches with directories in $TRICHECK_HOME/util/results";
 
 
   # Check if TRICHECK_HOME exists
