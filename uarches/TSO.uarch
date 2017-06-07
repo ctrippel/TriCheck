@@ -5,100 +5,310 @@
 % "=>" = IMPLIES
 % "%"  = COMMENT
 %
-% Graph node = (instruction, (pipeline, stage number))
+% Graph node = (instruction, [(pipeline,] stage number[)])
 % Graph edge = (node, node, label)
 %
 % "c" is predefined to be the core ID
 
-StageName 0 "LocalVisibility".
-StageName 1 "GlobalVisibility".
+% To convert the SC uarch to the TSO uarch, you will need to do the following:
+%
+% 1. Add a store buffer stage to the microarchitecture.
+% 2. Enforce that writes go through the store buffer before they reach memory.
+% 3. Enforce that writes on the same core go through the store buffer in program order.
+% 4. Ensure that a write is only released from the store buffer after all
+%    prior writes from that core have reached memory.
+% 5. Ensure that if a load is reading from memory, that core's store buffer has
+%    no entries for the address of the load.
+% 6. (Advanced) Allow a core to read the value of a write from its store buffer,
+%    before that write is made visible to other cores.
+% 7. (Extra) Implement a fence operation that flushes all prior writes to
+%    memory before any succeeding instructions can perform.
 
-Axiom "WriteSerialization":
-forall microops "i1", forall microops "i2",
-( ~(SameMicroop i1 i2) /\ IsAnyWrite i1 /\ IsAnyWrite i2 /\ SamePhysicalAddress i1 i2) =>
-(AddEdge ((i1, (CoreOf i1, 1)), (i2, (CoreOf i2, 1)), "ws") \/
- AddEdge ((i2, (CoreOf i2, 1)), (i1, (CoreOf i1, 1)), "ws")).
+StageName 0 "Fetch".
+StageName 1 "Execute".
+StageName 2 "Writeback".
 
-DefineMacro "ReadsFromData" w r:
-IsAnyWrite w /\ SamePhysicalAddress w r /\ SameData w r /\
-(~exists microop "w'",
-  IsAnyWrite w' /\ SamePhysicalAddress w' r /\
-  EdgesExist [((w , (CoreOf w , 1)), (w', (CoreOf w', 1)), "");
-              ((w', (CoreOf w', 1)), (r , (CoreOf r , 1)), "")]).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 1. Add store buffer stage to uarch                                          %
+%                                                                             %
+% Modify the following stages so that stage 3 is "StoreBuffer",               %
+% and "MemoryHierarchy" becomes stage 4.                                      %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-DefineMacro "ReadsFromInstruction":
-exists microop "w",
-  ExpandMacro ReadsFromData w i /\
-  (( SameCore w i /\ AddEdge ((w, (CoreOf w, 0)), (i, (CoreOf i, 1)), "rfi")) \/
-   (~SameCore w i /\ AddEdge ((w, (CoreOf w, 1)), (i, (CoreOf i, 1)), "rfe"))) /\
-  (forall microops "w'",
-    IsWrite w' => SamePhysicalAddress w w' =>
-    EdgeExists ((w, (CoreOf w, 1)), (w', (CoreOf w', 1)), "") =>
-    (( SameCore i w' /\ AddEdge ((i, (CoreOf i, 1)), (w', (CoreOf w', 0)), "fri")) \/
-     (~SameCore i w' /\ AddEdge ((i, (CoreOf i, 1)), (w', (CoreOf w', 1)), "fre")))).
+StageName 3 "StoreBuffer".
+StageName 4 "MemoryHierarchy".
 
-DefineMacro "ReadsFromInitial":
-DataFromInitialStateAtPA i /\
-(forall microops "w",
-  SamePhysicalAddress i w => IsAnyWrite w =>
-  AddEdge ((i, (CoreOf i, 1)), (w, (CoreOf w, 1)), "fr")).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-Axiom "Reads":
+Axiom "Reads_Path":
 forall microops "i",
 IsAnyRead i =>
-(ExpandMacro ReadsFromInitial \/ ExpandMacro ReadsFromInstruction).
+AddEdges [((i, Fetch),      (i, Execute),     "path");
+          ((i, Execute),     (i, Writeback),    "path")].
 
-Axiom "Writes":
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 2. Ensure that writes go through store buffer before reaching memory.       %
+%                                                                             %
+% Modify the edges in the following axiom so that instead of going from       %
+% Writeback to MemoryHierarchy directly, writes go from Writeback to          %
+% StoreBuffer and from there to MemoryHierarchy.                              %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "Writes_Path":
 forall microops "i",
 IsAnyWrite i =>
-AddEdge ((i, (CoreOf i, 0)), (i, (CoreOf i, 1)), "path").
+AddEdges [((i, Fetch),      (i, Execute),     "path");
+          ((i, Execute),     (i, Writeback),    "path");
+          ((i, Writeback),     (i, StoreBuffer),    "path");
+          ((i, StoreBuffer),     (i, (0, MemoryHierarchy)),    "path")
+          ].
 
-Axiom "PPO":
-forall microops "i1", forall microops "i2",
-ProgramOrder i1 i2 =>
-((IsAnyRead  i1 /\ IsAnyRead  i2) \/
- (IsAnyRead  i1 /\ IsAnyWrite i2) \/
- (IsAnyWrite i1 /\ IsAnyWrite i2)) =>
-AddEdge ((i1, (CoreOf i1, 1)), (i2, (CoreOf i2, 1)), "ppo").
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-Axiom "po_loc":
-forall microops "i1", forall microops "i2",
-ProgramOrder i1 i2 => SamePhysicalAddress i1 i2 =>
-(IsAnyRead i1 => IsAnyRead i2 =>
-  AddEdge ((i1, (CoreOf i1, 1)), (i2, (CoreOf i2, 1)), "poloc")) /\
-(IsAnyRead i1 => IsAnyWrite i2 =>
-  AddEdge ((i1, (CoreOf i1, 1)), (i2, (CoreOf i2, 0)), "poloc")) /\
-(IsAnyWrite i1 => IsAnyRead i2 =>
-  AddEdge ((i1, (CoreOf i1, 0)), (i2, (CoreOf i2, 1)), "poloc")) /\
-(IsAnyWrite i1 => IsAnyWrite i2 =>
-  AddEdge ((i1, (CoreOf i1, 0)), (i2, (CoreOf i2, 0)), "poloc")).
+Axiom "PO_Fetch":
+forall microops "i1",
+forall microops "i2",
+SameCore i1 i2 /\ ProgramOrder i1 i2 =>
+AddEdge ((i1, Fetch), (i2, Fetch), "PO", "blue").
 
-Axiom "mfence":
-forall microops "i1", forall microops "i2",
-ProgramOrder i1 i2 =>
-(IsAnyFence i1 \/ IsAnyFence i2) =>
-AddEdge ((i1, (CoreOf i1, 1)), (i2, (CoreOf i2, 1)), "mfence").
+Axiom "Execute_stage_is_in_order":
+forall microops "i1",
+forall microops "i2",
+SameCore i1 i2 /\ EdgeExists ((i1, Fetch),  (i2, Fetch), "") =>
+AddEdge ((i1, Execute), (i2, Execute), "PPO", "darkgreen").
 
-Axiom "sc_read":
-forall microops "r",
-OnCore c r =>
-IsAnyRead r => AccessType Sc r =>
-(forall microops "w", IsAnyWrite w /\ AccessType Sc w /\ ProgramOrder w r =>
-AddEdge ((w, (CoreOf w, 1)), (r, (CoreOf r, 1)), "sc_order")).
+% Note: This enforces ordering at WB if ordering is enforced at IF.
+Axiom "Writeback_stage_is_in_order":
+forall microops "i1",
+forall microops "i2",
+SameCore i1 i2 /\ EdgeExists ((i1, Fetch),  (i2, Fetch), "") =>
+AddEdge ((i1, Writeback), (i2, Writeback), "PPO", "darkgreen").
 
-Axiom "WriteIsBeforeFinal":
-forall microop "w",
-forall microop "w'",
-(IsAnyWrite w /\ IsAnyWrite w' /\ SamePhysicalAddress w w' /\
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 3. Ensure that writes from the same core go through the store buffer in     %
+%    program order.                                                           %
+%                                                                             %
+% Add an axiom below to enforce that if two writes go through the             %
+% Writeback stage in order, then they go through the store buffer in order    %
+% as well.                                                                    %
+%                                                                             %
+% Hint: You can use the Writeback_stage_is_in_order axiom above as a starting %
+%       point, but remember that this axiom should only apply to pairs of     %
+%       writes.                                                               %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "StoreBuffer_stage_is_in_order":
+forall microops "i1",
+forall microops "i2",
+IsAnyWrite i1 /\ IsAnyWrite i2 /\ SameCore i1 i2 =>
+EdgeExists ((i1, Writeback),  (i2, Writeback), "") =>
+AddEdge ((i1, StoreBuffer), (i2, StoreBuffer), "PPO", "darkgreen").
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 4. Ensure that a write is only released from the store buffer after all     %
+%    prior writes from that core have reached memory.                         %
+%                                                                             %
+% Modify the axiom below to enforce that if two writes on the same core go    %
+% through the store buffer in order, then the first write reaches memory      %
+% before the second one can leave the store buffer.                           %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "EnforceWriteOrdering":
+  forall microop "w",
+  forall microop "w'",
+  (IsAnyWrite w /\ IsAnyWrite w' /\ ~SameMicroop w w' /\ SameCore w w') =>
+    EdgeExists ((w, StoreBuffer),  (w', StoreBuffer), "") =>
+      AddEdge ((w, (0, MemoryHierarchy)), (w', StoreBuffer), "one_at_a_time", "green").
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "WriteSerialization":
+forall microops "i1",
+forall microops "i2",
+    ( ~(SameMicroop i1 i2) /\ IsAnyWrite i1 /\ IsAnyWrite i2 /\ SamePhysicalAddress i1 i2) =>
+    (EdgeExists ((i1, (0, MemoryHierarchy)), (i2, (0, MemoryHierarchy)), "ws", "red") \/
+     EdgeExists ((i2, (0, MemoryHierarchy)), (i1, (0, MemoryHierarchy)), "ws", "red")).
+
+Axiom "EnforceFinalWrite":
+  forall microop "w",
+  forall microop "w'",
+  (IsAnyWrite w /\ IsAnyWrite w' /\ SamePhysicalAddress w w' /\
    ~SameMicroop w w' /\ DataFromFinalStateAtPA w') =>
-AddEdge ((w, (CoreOf w, 1)), (w', (CoreOf w', 1)), "ws_final").
+      AddEdge ((w, (0, MemoryHierarchy)), (w', (0, MemoryHierarchy)), "ws_final", "red").
 
-Axiom "RMW":
-forall microop "w",
-IsAnyWrite w => AccessType RMW w =>
-(forall microops "i2", ProgramOrder w i2 => IsAnyRead i2 /\
-  AddEdge ((w, (CoreOf w, 1)), (i2, (CoreOf i2, 1)), "rmw")) /\
-(exists microop "r", ConsecutiveMicroops r w /\ IsAnyRead r /\
-  ~exists microop "w'", IsAnyWrite w' /\ SamePhysicalAddress w w' /\
-    EdgesExist [((r , (CoreOf r , 1)), (w', (CoreOf w', 1)), "");
-                ((w', (CoreOf w', 1)), (w , (CoreOf w , 1)), "")]).
+% Constraints on values read by loads follow.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 5. Ensure that if a load is reading from memory, that core's store buffer   %
+%    has no entries for the address of the load.                              %
+%                                                                             %
+% Create a macro below to enforce that all writes before an instruction "i"   %
+% in program order have reached memory before the Execute stage of            %
+% instruction "i".                                                            %
+%                                                                             %
+% Remember that since this is a macro, it will not affect execution unless it %
+% is included in an axiom through the use of "ExpandMacro <macro name>".      %
+% Thus, expand this macro appropriately in the Read_Values axiom near the     %
+% end of the file. See the instructions above the Read_Values axiom for more  %
+% details.                                                                    %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+DefineMacro "STBEmpty":
+  % Store buffer is empty for the address we want to read.
+  forall microop "w", (
+    (IsAnyWrite w /\ SameCore w i /\ SameVirtualAddress w i /\ ProgramOrder w i) =>
+    AddEdge ((w, (0, MemoryHierarchy)), (i, Execute), "STBEmpty", "purple")).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+DefineMacro "BeforeAllWrites":
+  % Read occurs before all writes to same PA & Data
+  DataFromInitialStateAtPA i /\
+  forall microop "w", (
+    (IsAnyWrite w /\ SamePhysicalAddress w i /\ ~SameMicroop i w) =>
+    AddEdge ((i, Execute), (w, (0, MemoryHierarchy)), "fr", "red")).
+
+DefineMacro "Before_Or_After_Every_SameAddrWrite":
+  % Either before or after every write to the same physical address
+  forall microop "w", (
+    (IsAnyWrite w /\ SamePhysicalAddress w i) =>
+    (AddEdge ((w, (0, MemoryHierarchy)), (i, Execute), "wsrf", "crimson") \/
+     AddEdge ((i, Execute), (w, (0, MemoryHierarchy)), "fr", "red"))).
+
+DefineMacro "No_SameAddrWrites_Btwn_Src_And_Read":
+  % Read from "w", and there must not exist any writes w' in between w and i
+  exists microop "w", (
+    IsAnyWrite w /\ SamePhysicalAddress w i /\ SameData w i /\
+    AddEdge ((w, (0, MemoryHierarchy)), (i, Execute), "rf", "red") /\
+    ~(exists microop "w'",
+      IsAnyWrite w' /\ SamePhysicalAddress i w' /\ ~SameMicroop w w' /\
+      EdgesExist [((w , (0, MemoryHierarchy)), (w', (0, MemoryHierarchy)), "");
+                  ((w', (0, MemoryHierarchy)), (i, Execute), "")])).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 5. (Contd.) Invoke the STBEmpty macro to enforce that if a load is reading  %
+%    from memory, the store buffer of that core has no entries for the load's %
+%    address.                                                                 %
+%                                                                             %
+% The axiom below enforces (by expanding macros) that a load must either      %
+% (a) occur before all writes, or                                             %
+% (b) read from the latest write to that address, and be ordered with respect %
+%     to every write to that address.                                         %
+%                                                                             %
+% In all cases of the current axiom below, the load reads from memory.        %
+% Modify the axiom to enforce that whenever a core reads from memory, its     %
+% store buffer has no entries for the address of the load (by expanding the   %
+% STBEmpty macro).                                                            %
+%                                                                             %
+% If you decide to do the Advanced portion of this hands-on (reading your own %
+% write early), include the macro detailing forwarding from the store buffer  %
+% as an alternate option to the cases of reading from memory that are         %
+% currently below.                                                            %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "Read_Values":
+forall microops "i",
+IsAnyRead i =>
+(
+  ExpandMacro STBFwd \/
+  (
+       ExpandMacro STBEmpty /\
+       (
+          ExpandMacro BeforeAllWrites
+          \/
+          (
+            ExpandMacro No_SameAddrWrites_Btwn_Src_And_Read
+            /\
+            ExpandMacro Before_Or_After_Every_SameAddrWrite
+          )
+       )
+  )
+).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 6. (Advanced) Allow a core to read the value of a write from its store      %
+%    buffer, before that write is made visible to other cores.                %
+%                                                                             %
+% Add a macro below that checks for a write to the same address with the same %
+% data as a load instruction "i" on the same core as the write, and adds      %
+% edges from the Execute stage of the write to the Execute stage of the load  %
+% (to reflect forwarding in the pipeline and store buffer) and from the       %
+% Execute stage of the load to when the store reaches memory (since           %
+% forwarding from the store buffer must occur before the write leaves the     %
+% store buffer and reaches memory.                                            %
+%                                                                             %
+% The macro must also check that there are no writes to the same address in   %
+% program order between the forwarding write and the load. This is necessary  %
+% because any forwarding must occur from the latest write to a given address  %
+% before the load.                                                            %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+DefineMacro "STBFwd":
+  % Forward from the store buffer
+  exists microop "w", (
+    IsAnyWrite w /\
+    SameCore w i /\
+    SamePhysicalAddress w i /\
+    SameData w i /\
+    AddEdges [((w, Execute), (i, Execute), "STBFwd", "red");
+              ((i, Execute), (w, (0, MemoryHierarchy)), "STBFwd", "purple")]) /\
+    % Ensure the STB entry is the latest one.
+    ~exists microop "w'",
+    IsAnyWrite w' /\ SameVirtualAddress w w' /\ SameCore w w' /\
+    ProgramOrder w w' /\ ProgramOrder w' i.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                             %
+% 7. (Extra) Implement a fence operation that flushes all prior writes to     %
+%    memory before any succeeding instructions can perform.                   %
+%                                                                             %
+% Add an axiom below detailing the operations of a fence instruction which    %
+% can be used for synchronization between threads. The fence should have      %
+% three stages: Fetch, Execute, and Writeback. In addition, the fence should  %
+% ensure that all writes prior to the fence in program order must reach       %
+% memory before the Execute stage of the fence.                               %
+%                                                                             %
+% Hint: You can use the predicate "IsAnyFence <instr identifier>" to check    %
+%       whether an instruction is a fence or not.                             %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "Fence_Ordering":
+forall microops "f",
+IsAnyFence f =>
+AddEdges [((f, Fetch),       (f, Execute),      "path");
+          ((f, Execute),     (f, Writeback), "path")]
+/\
+(
+  forall microops "w",
+    (IsAnyWrite w /\ SameCore w f /\ ProgramOrder w f) =>
+      AddEdge ((w, (0, MemoryHierarchy)), (f, Execute), "fence", "orange")
+).
+
