@@ -84,7 +84,7 @@ forall microops "r",
 OnCore c r =>
 IsAnyRead r => AccessType Sc r =>
 (forall microops "w", IsAnyWrite w /\ AccessType Sc w /\ ProgramOrder w r =>
-AddEdge ((w, (CoreOf w, 1)), (r, (CoreOf i2, 1)), "sc_order")).
+AddEdge ((w, (CoreOf w, 1)), (r, (CoreOf r, 1)), "sc_order")).
 
 Axiom "WriteIsBeforeFinal":
 forall microop "w",
