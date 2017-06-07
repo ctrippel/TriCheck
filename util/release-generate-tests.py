@@ -117,17 +117,17 @@ def main(argv):
     elif opt in ("-A", "--all"):
       py_01_opts += " --all";
 
-  if not os.path.isdir(TriCheck_dir):
+  if not os.path.isdir(os.path.expanduser(TriCheck_dir)):
     print "$TRICHECK_HOME directory is missing. Please create one..."
     print usage_string;
     sys.exit(1)
 
-  if not os.path.isdir(templates_dir):
+  if not os.path.isdir(os.path.expanduser(templates_dir)):
     print "$TRICHECK_HOME/tests/templates directory is missing. Please create one..."
     print usage_string;
     sys.exit(1)
 
-  if not os.path.isdir(herd_dir):
+  if not os.path.isdir(os.path.expanduser(herd_dir)):
     print "ERROR: Herd directory is missing. Please specify or create one...\n"
     print usage_string;
     sys.exit(1)
@@ -147,7 +147,7 @@ def main(argv):
     print usage_string;
     sys.exit(1)
 
-  if not os.path.isdir(ctests_dir):
+  if not os.path.isdir(os.path.expanduser(ctests_dir)):
     os.makedirs(ctests_dir)
 
   helper01 = TriCheck_dir + "/util/helper/01-release-generate-cpp-tests.py " + py_01_opts;

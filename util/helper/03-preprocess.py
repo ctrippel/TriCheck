@@ -252,12 +252,12 @@ def main(argv):
       fenceTests = True;
 
 
-  if not os.path.isdir(templates_dir):
+  if not os.path.isdir(os.path.expanduser(templates_dir)):
     print "ERROR: $TRICHECK_HOME/tests/templates directory is missing. Please specify or create one..."
     print usage_string;
     sys.exit(1)
 
-  if not os.path.isdir(ctests_dir):
+  if not os.path.isdir(os.path.expanduser(ctests_dir)):
     print "ERROR: C11 tests directory (ctests) is missing. Please specify or create one..."
     print usage_string;
     sys.exit(1)

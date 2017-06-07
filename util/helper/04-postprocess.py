@@ -203,7 +203,7 @@ def main(argv):
      elif opt in ("-c", "--ctests"):
        templates_dir = arg
 
-  if not os.path.isdir(ctests_dir):
+  if not os.path.isdir(os.path.expanduser(ctests_dir)):
     print "ERROR: C11 tests directory (ctests) is missing. Please specify or create one...\n"
     print usage_string;
     sys.exit(1)

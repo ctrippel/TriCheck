@@ -312,3 +312,39 @@ AddEdges [((f, Fetch),       (f, Execute),      "path");
       AddEdge ((w, (0, MemoryHierarchy)), (f, Execute), "fence", "orange")
 ).
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                             %
+% 7. (Extra) Implement a fence operation that flushes all prior writes to     %
+%    memory before any succeeding instructions can perform.                   %
+%                                                                             %
+% Add an axiom below detailing the operations of a fence instruction which    %
+% can be used for synchronization between threads. The fence should have      %
+% three stages: Fetch, Execute, and Writeback. In addition, the fence should  %
+% ensure that all writes prior to the fence in program order must reach       %
+% memory before the Execute stage of the fence.                               %
+%                                                                             %
+% Hint: You can use the predicate "IsAnyFence <instr identifier>" to check    %
+%       whether an instruction is a fence or not.                             %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "SC_Order":
+forall microops "r",
+OnCore c r =>
+IsAnyRead r => AccessType Sc r =>
+(forall microops "w", IsAnyWrite w /\ AccessType Sc w /\ SameCore w r /\ ProgramOrder w r =>
+  AddEdge ((w, (0, MemoryHierarchy)), (r, Execute), "sc_order", "orange")).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+
+
+

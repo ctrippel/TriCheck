@@ -73,18 +73,18 @@ def main(argv):
      elif opt in ("-H", "--herd"):
        herd_dir = arg;
 
-  if not os.path.isdir(TriCheck_dir):
+  if not os.path.isdir(os.path.expanduser(TriCheck_dir)):
     print "Have you set the $TRICHECK_HOME environment variable? \
            \nERROR: $TRICHECK_HOME directory does not exist...\n";
     print usage_string;
     sys.exit(1)
 
-  if not os.path.isdir(ctests_dir):
+  if not os.path.isdir(os.path.expanduser(ctests_dir)):
     print "ERROR: C11 tests directory (ctests) is missing. Please specify or create one...\n"
     print usage_string;
     sys.exit(1)
 
-  if not os.path.isdir(herd_dir):
+  if not os.path.isdir(os.path.expanduser(herd_dir)):
     print "ERROR: Herd directory is missing. Please specify or create one...\n"
     print usage_string;
     sys.exit(1)

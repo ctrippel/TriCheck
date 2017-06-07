@@ -239,7 +239,7 @@ def main(argv):
       write_orders.append('relaxed');
 
   # Check if the templates directory is a real directory
-  if not os.path.isdir(templates_dir):
+  if not os.path.isdir(os.path.expanduser(templates_dir)):
     print "ERROR: $TRICHECK_HOME/tests/templates directory is missing. Please specify or create one...\n"
     print usage_string;
     sys.exit(1);
@@ -249,7 +249,7 @@ def main(argv):
     print usage_string;
     sys.exit(1);
    
-  if not os.path.isdir(ctests_dir):
+  if not os.path.isdir(os.path.expanduser(ctests_dir)):
     os.makedirs(ctests_dir)
 
   print "[TRICHECK...] Running helper/01-release-generate-cpp-tests.py to generate C11 tests...\n"

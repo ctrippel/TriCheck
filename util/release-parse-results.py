@@ -74,7 +74,7 @@ def main(argv):
       models_list = arg
 
 
-  if not os.path.isdir(results_dir):
+  if not os.path.isdir(os.path.expanduser(results_dir)):
     print "ERROR: $TRICHECK_HOME/util/results directory is missing. Please specify or create one..."
     print usage_string;
     sys.exit(1)
