@@ -1,4 +1,4 @@
-C sb_<TEST>
+C <TEST>
 
 {
 [x] = 0;
@@ -6,13 +6,13 @@ C sb_<TEST>
 }
 
 P0 (atomic_int* y, atomic_int* x) {
- atomic_store_explicit(x,1,memory_order_<ORDER_STORE>);
- int r0 = atomic_load_explicit(y,memory_order_<ORDER_LOAD>);
+
+
 }
 
 P1 (atomic_int* y, atomic_int* x) {
- atomic_store_explicit(y,1,memory_order_<ORDER_STORE>);
- int r1 = atomic_load_explicit(x,memory_order_<ORDER_LOAD>);
+
+
 }
 
-exists (0:r0=0 /\ 1:r1=0)
+exists (           )

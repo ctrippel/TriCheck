@@ -1,0 +1,273 @@
+% Legend:
+% "/\" = AND
+% "\/" = OR
+% "~"  = NOT
+% "=>" = IMPLIES
+% "%"  = COMMENT
+%
+% Graph node = (instruction, [(pipeline,] stage number[)])
+% Graph edge = (node, node, label)
+%
+% "c" is predefined to be the core ID
+
+% To convert the TSO uarch to the TSO-RR uarch, that relaxes Ld-Ld order, AND to add
+% ISA support for C11 atomic operations:
+%
+% 1. Modify the Execute_stage_is_in_order axiom to allow Loads to execute out of order.
+% 2. Require that dependent operations are ordered by default
+% 3. Add axioms to support ISA instructions that are intended to implement C11 atomic
+%    operations - Read Sc, Write Sc, Read Acq, Write Rel, Read Rlx, and Write Rlx.  
+%
+% NOTE: We have included a new keword, AccessType, that enables you to constrain a
+%       predicate to apply only to a primitive labeled with a specific AccessType.
+%       E.g., we may want to define an axiom for only Write Rel elements rather than all
+%       Write elements.
+
+StageName 0 "Fetch".
+StageName 1 "Execute".
+StageName 2 "Writeback".
+StageName 3 "StoreBuffer".
+StageName 4 "MemoryHierarchy".
+
+Axiom "Reads_Path":
+forall microops "i",
+IsAnyRead i =>
+AddEdges [((i, Fetch),      (i, Execute),     "path");
+          ((i, Execute),     (i, Writeback),    "path")].
+
+Axiom "Writes_Path":
+forall microops "i",
+IsAnyWrite i =>
+AddEdges [((i, Fetch),      (i, Execute),     "path");
+          ((i, Execute),     (i, Writeback),    "path");
+          ((i, Writeback),     (i, StoreBuffer),    "path");
+          ((i, StoreBuffer),     (i, (0, MemoryHierarchy)),    "path")
+          ].
+
+
+Axiom "PO_Fetch":
+forall microops "i1",
+forall microops "i2",
+SameCore i1 i2 /\ ProgramOrder i1 i2 =>
+AddEdge ((i1, Fetch), (i2, Fetch), "PO", "blue").
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                             %
+% 1. Modify Execute_stage_is_in_order axiom to permit Ld-Ld reordering        %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "Execute_stage_is_in_order":
+forall microops "i1",
+forall microops "i2",
+SameCore i1 i2 /\ ~(IsAnyRead i1 /\ IsAnyRead i2 /\ ~SamePhysicalAddress i1 i2) /\
+% SameCore i1 i2 /\ ~(IsAnyRead i1 /\ IsAnyRead i2) /\
+EdgeExists ((i1, Fetch),  (i2, Fetch), "") =>
+AddEdge ((i1, Execute), (i2, Execute), "PPO", "darkgreen").
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Note: This enforces ordering at WB if ordering is enforced at IF.
+Axiom "Writeback_stage_is_in_order":
+forall microops "i1",
+forall microops "i2",
+SameCore i1 i2 /\ EdgeExists ((i1, Fetch),  (i2, Fetch), "") =>
+AddEdge ((i1, Writeback), (i2, Writeback), "PPO", "darkgreen").
+
+Axiom "StoreBuffer_stage_is_in_order":
+forall microops "i1",
+forall microops "i2",
+IsAnyWrite i1 /\ IsAnyWrite i2 /\ SameCore i1 i2 =>
+EdgeExists ((i1, Writeback),  (i2, Writeback), "") =>
+AddEdge ((i1, StoreBuffer), (i2, StoreBuffer), "PPO", "darkgreen").
+
+Axiom "EnforceWriteOrdering":
+  forall microop "w",
+  forall microop "w'",
+  (IsAnyWrite w /\ IsAnyWrite w' /\ ~SameMicroop w w' /\ SameCore w w') =>
+    EdgeExists ((w, StoreBuffer),  (w', StoreBuffer), "") =>
+      AddEdge ((w, (0, MemoryHierarchy)), (w', StoreBuffer), "one_at_a_time", "green").
+
+Axiom "WriteSerialization":
+forall microops "i1",
+forall microops "i2",
+    ( ~(SameMicroop i1 i2) /\ IsAnyWrite i1 /\ IsAnyWrite i2 /\ SamePhysicalAddress i1 i2) =>
+    (EdgeExists ((i1, (0, MemoryHierarchy)), (i2, (0, MemoryHierarchy)), "ws", "red") \/
+     EdgeExists ((i2, (0, MemoryHierarchy)), (i1, (0, MemoryHierarchy)), "ws", "red")).
+
+Axiom "EnforceFinalWrite":
+  forall microop "w",
+  forall microop "w'",
+  (IsAnyWrite w /\ IsAnyWrite w' /\ SamePhysicalAddress w w' /\
+   ~SameMicroop w w' /\ DataFromFinalStateAtPA w') =>
+      AddEdge ((w, (0, MemoryHierarchy)), (w', (0, MemoryHierarchy)), "ws_final", "red").
+
+% Constraints on values read by loads follow.
+
+DefineMacro "STBEmpty":
+  % Store buffer is empty for the address we want to read.
+  forall microop "w", (
+    (IsAnyWrite w /\ SameCore w i /\ SameVirtualAddress w i /\ ProgramOrder w i) =>
+    AddEdge ((w, (0, MemoryHierarchy)), (i, Execute), "STBEmpty", "purple")).
+
+DefineMacro "BeforeAllWrites":
+  % Read occurs before all writes to same PA & Data
+  DataFromInitialStateAtPA i /\
+  forall microop "w", (
+    (IsAnyWrite w /\ SamePhysicalAddress w i /\ ~SameMicroop i w) =>
+    AddEdge ((i, Execute), (w, (0, MemoryHierarchy)), "fr", "red")).
+
+DefineMacro "Before_Or_After_Every_SameAddrWrite":
+  % Either before or after every write to the same physical address
+  forall microop "w", (
+    (IsAnyWrite w /\ SamePhysicalAddress w i) =>
+    (AddEdge ((w, (0, MemoryHierarchy)), (i, Execute), "wsrf", "crimson") \/
+     AddEdge ((i, Execute), (w, (0, MemoryHierarchy)), "fr", "red"))).
+
+DefineMacro "No_SameAddrWrites_Btwn_Src_And_Read":
+  % Read from "w", and there must not exist any writes w' in between w and i
+  exists microop "w", (
+    IsAnyWrite w /\ SamePhysicalAddress w i /\ SameData w i /\
+    AddEdge ((w, (0, MemoryHierarchy)), (i, Execute), "rf", "red") /\
+    ~(exists microop "w'",
+      IsAnyWrite w' /\ SamePhysicalAddress i w' /\ ~SameMicroop w w' /\
+      EdgesExist [((w , (0, MemoryHierarchy)), (w', (0, MemoryHierarchy)), "");
+                  ((w', (0, MemoryHierarchy)), (i, Execute), "")])).
+
+Axiom "Read_Values":
+forall microops "i",
+IsAnyRead i =>
+(
+  ExpandMacro STBFwd \/
+  (
+       ExpandMacro STBEmpty /\
+       (
+          ExpandMacro BeforeAllWrites
+          \/
+          (
+            ExpandMacro No_SameAddrWrites_Btwn_Src_And_Read
+            /\
+            ExpandMacro Before_Or_After_Every_SameAddrWrite
+          )
+       )
+  )
+).
+
+DefineMacro "STBFwd":
+  % Forward from the store buffer
+  exists microop "w", (
+    IsAnyWrite w /\
+    SameCore w i /\
+    SamePhysicalAddress w i /\
+    SameData w i /\
+    AddEdges [((w, Execute), (i, Execute), "STBFwd", "red");
+              ((i, Execute), (w, (0, MemoryHierarchy)), "STBFwd", "purple")]) /\
+    % Ensure the STB entry is the latest one.
+    ~exists microop "w'",
+    IsAnyWrite w' /\ SameVirtualAddress w w' /\ SameCore w w' /\
+    ProgramOrder w w' /\ ProgramOrder w' i.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                             %
+% Note: We are making use of a new uspec keyword, "AccessType". The           %
+%       Fence_Ordering axiom will only take effect for fences of type         %
+%       MMFENCE. "MMFENCE" stands for Memory->Memory Fence.                   %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "Fence_Ordering":
+forall microops "f",
+IsAnyFence f /\ AccessType MMFENCE f =>
+AddEdges [((f, Fetch),       (f, Execute),      "path");
+          ((f, Execute),     (f, Writeback), "path")]
+/\
+(
+  forall microops "w",
+    (IsAnyWrite w /\ SameCore w f /\ ProgramOrder w f) =>
+      AddEdge ((w, (0, MemoryHierarchy)), (f, Execute), "fence", "orange")
+).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                             %
+% 2. Since we are relaxing Ld-Ld order, we need to take into account          %
+%    dependency orderings. Let's assume that we want to preserve dependency   %
+%    order by defualt. Complete the following depdencey axioms.               %
+%                                                                             %
+% Note: Relaxing Ld-Ld order affects address and control dependencies.        %
+% Hint: Make use of the HasDepdency <addr|data|ctrl|ctrlisb> <i1> <i2>        %
+%       predicate.                                                            %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "Addr_Read_Read_Dependencies":
+forall microops "i1",
+forall microops "i2",
+SameCore i1 i2 /\ IsAnyRead i1 /\ IsAnyRead i2 /\ HasDependency addr i1 i2 =>
+  AddEdge ((i1, Execute), (i2, Execute), "addr_rr_dependency").
+
+%We choose to just model the ctrlisb dependency with a single
+%edge and not explicitly show the branch and isb instructions.
+Axiom "CtrlIsb_Read_Read_Dependencies":
+forall microops "i1",
+forall microops "i2",
+SameCore i1 i2 /\ IsAnyRead i1 /\ IsAnyRead i2 /\ HasDependency ctrlisb i1 i2 =>
+  AddEdge ((i1, Execute), (i2, Execute), "ctrlisb").
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                             %
+% 3. Axioms to support ISA instructions that are intended to implement C11    %
+%    atomic operations - Read Sc, Write Sc, Read Acq, Write Rel, Read Rlx,    %
+%    and Write Rlx.					                      %
+%                                                                             %
+% Note: We are again making use of the uspec keyword, AccessType. Unless an   %
+%       access type is also specified, a predicate will apply to all accesses %
+%       of a specied typed type (e.g., Write vs. Write Sc).                   %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "Read_Sc":
+% Read and Write operations following a Read Sc must be ordered after the Read Sc
+% Read to Write order is enforced by default for nomal Reads and Writes
+forall microops "r",
+IsAnyRead r => AccessType Sc r =>
+(forall microops "r'", SameCore r r' /\ IsAnyRead r' /\ ProgramOrder r r' =>
+  AddEdge ((r, Execute), (r', Execute), "read_sc", "orange")).
+
+% Axiom "Write_Sc": N/A
+% Read and Write operations preceding a Write Sc must be ordered before the Write Sc
+% Read-Write and Write-Write order is enforced by default for normal Reads and Writes
+
+Axiom "Sc_TotalOrder":
+% C11 requires a total order on Read Sc and Write Sc operations
+% PO-previous Write Sc operations must reach the MemoryHierachy before a Read Sc executes
+forall microops "r",
+IsAnyRead r => AccessType Sc r =>
+(forall microops "w", SameCore w r /\ IsAnyWrite w /\ AccessType Sc w /\ ProgramOrder w r =>
+  AddEdge ((w, (0, MemoryHierarchy)), (r, Execute), "sc_order", "orange")).
+
+Axiom "Read_Acq":
+% Read and Write operations following a Read Acq must be ordered after the Read Acq
+forall microops "r",
+IsAnyRead r => AccessType Acq r =>
+(forall microops "r'", SameCore r r' /\ IsAnyRead r' /\ ProgramOrder r r' =>
+  AddEdge ((r, Execute), (r', Execute), "read_acq", "orange")).
+
+% Axiom "Write_Rel": N/A
+% Read and Write operations preceding a Write Rel must be ordered before the Write Rel
+% Read-Write and Write-Write order is enforced by default for normal Reads and Writes
+
+% Axiom "Read_Rlx": N/A
+% No extra ordering requirement
+
+% Axiom "Write_Rlx": N/A
+% No extra ordering requirement
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

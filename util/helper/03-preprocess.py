@@ -171,7 +171,7 @@ def permuteTests(ctests_dir, templates_dir, mixedTests):
           for label in combination[write_index]:
             filename += "_" + label
           writes = combination[write_index]
-         
+        
         r = 0; w = 0; f = 0;
         fn_out = ctests_dir + "/" + filename_base + "/pipecheck/" + filename + ".test";
         if os.path.exists(fn_out):
@@ -182,19 +182,20 @@ def permuteTests(ctests_dir, templates_dir, mixedTests):
         for line in fileinput.input(fn_in):
           line = re.sub('<TEST>', filename, line);
           if (re.match('.*Read.*', line)):
-            if reads[r] not in ['relaxed', 'acquire','seq_cst']:
+            if reads[r] not in ['relaxed', 'acquire', 'seq_cst']:
               line = re.sub('Read', 'Read ' + reads[r] + ' ', line);
-            r += 1
+            r = (r + 1) % len(writes)
           if (re.match('.*Write.*', line)):
-            if writes[w] not in ['relaxed', 'release','seq_cst']:
+            if writes[w] not in ['relaxed', 'release', 'seq_cst']:
               line = re.sub('Write', 'Write ' + writes[w] + ' ', line);
-            w += 1
+            w = (w + 1) % len(writes)
           fp_out.write(line);
   
         fp_out.close();
           
   
 def main(argv):
+  atomicTests = False;
   mixedTests = False;
   fenceTests = False;
 
@@ -208,10 +209,6 @@ def main(argv):
                  \n\t-f or --fences \t\t\t\t Generate tests that use fence mappings in compile.txt \
                  \n\t-m or --mixed \t\t\t\t Generate tests that use a combination of atomics and fence mappings in compile.txt";
 
-
-  atomicTests = False;
-  fenceTests = False;
-  mixedTests = False;
 
   if "TRICHECK_HOME" in os.environ:
     ctests_dir = os.environ['TRICHECK_HOME'] + "/tests/ctests";
@@ -251,7 +248,6 @@ def main(argv):
     elif opt in ("-f", "--fences"):
       fenceTests = True;
 
-
   if not os.path.isdir(os.path.expanduser(templates_dir)):
     print "ERROR: $TRICHECK_HOME/tests/templates directory is missing. Please specify or create one..."
     print usage_string;
@@ -264,9 +260,8 @@ def main(argv):
 
   print "[TRICHECK...] Running helper/03-preprocss.py to mark operations that use fence mappings...\n"
 
-  # default is fence tests
-  if (~atomicTests and ~mixedTests and ~fenceTests):
-    print "Prference of atomics vs. fences was not specified. Default is --fences."
+  if not (atomicTests | mixedTests | fenceTests):
+    print "Preference of atomics vs. fences was not specified. Default is --fences."
     fenceTests = True;
 
   print 'C11 tests directory is "' + ctests_dir + '"'

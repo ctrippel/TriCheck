@@ -81,7 +81,7 @@ def applyFenceMappings(ctests_dir):
         file_out = open(filename, "w");
         
         for line in fileinput.input(ctests_dir + '/' + dir + '/pipecheck/' + file):
-          if (re.match('^(Permitted|Forbidden)', line)):
+          if (re.match('^(Permitted|Forbidden|Alternative)', line)):
             # enumeration of po ending in new fences
             for core in po_prev:
               for inst in po_prev[core]:
@@ -96,6 +96,14 @@ def applyFenceMappings(ctests_dir):
                   for post in (po_post[core])[inst]:
                     relationship_str += "Relationship po " + inst + " 0 -> " + post + " 0\n"
             line = relationship_str + line;
+
+            relationship_str = ""
+            new_ind = newIndDir[dir] + 1;
+            prev_inst = []
+            post_inst = []
+            po_prev = {}
+            po_post = {}
+
           else:
             match_inst = re.match('^([0-9]+)(\s+)([0-9]+)(\s+)([0-9]+)(\s+)([0-9]+)(\s+).*', line);
             if (match_inst):

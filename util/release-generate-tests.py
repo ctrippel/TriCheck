@@ -153,6 +153,7 @@ def main(argv):
   helper01 = TriCheck_dir + "/util/helper/01-release-generate-cpp-tests.py " + py_01_opts;
   helper02 = TriCheck_dir + "/util/helper/02-release-batch-cpp-to-pipecheck.py " + py_02_opts;
   helper03 = TriCheck_dir + "/util/helper/03-preprocess.py " + py_03_opts;
+  print "helper03: ", helper03
   helper04 = TriCheck_dir + "/util/helper/04-postprocess.py " + py_04_opts;
 
   helper_scripts = [helper01, helper02, helper03, helper04]
