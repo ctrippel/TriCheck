@@ -3,5 +3,5 @@ Read relaxed	| NA		| NA
 Write relaxed	| NA		| NA
 Read acquire	| NA		| NA
 Write release	| NA		| NA
-Read seq_cst	| NA		| NA
-Write seq_cst	| NA		| MMFENCE
+Read seq_cst	| NA      	| NA
+Write seq_cst	| NA		| NA 
