@@ -60,8 +60,8 @@ AddEdge ((i1, Fetch), (i2, Fetch), "PO", "blue").
 Axiom "Execute_stage_is_in_order":
 forall microops "i1",
 forall microops "i2",
-SameCore i1 i2 /\ ~(IsAnyRead i1 /\ IsAnyRead i2 /\ ~SamePhysicalAddress i1 i2) /\
-% SameCore i1 i2 /\ ~(IsAnyRead i1 /\ IsAnyRead i2) /\
+% SameCore i1 i2 /\ ~(IsAnyRead i1 /\ IsAnyRead i2 /\ ~SamePhysicalAddress i1 i2) /\
+SameCore i1 i2 /\ ~(IsAnyRead i1 /\ IsAnyRead i2) /\
 EdgeExists ((i1, Fetch),  (i2, Fetch), "") =>
 AddEdge ((i1, Execute), (i2, Execute), "PPO", "darkgreen").
 
@@ -214,59 +214,6 @@ forall microops "i1",
 forall microops "i2",
 SameCore i1 i2 /\ IsAnyRead i1 /\ IsAnyRead i2 /\ HasDependency ctrlisb i1 i2 =>
   AddEdge ((i1, Execute), (i2, Execute), "ctrlisb").
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% END MODIFICATION REGION                                                     %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%                                                                             %
-% 3. Axioms to support ISA instructions that are intended to implement C11    %
-%    atomic operations - Read Sc, Write Sc, Read Acq, Write Rel, Read Rlx,    %
-%    and Write Rlx.					                      %
-%                                                                             %
-% Note: We are again making use of the uspec keyword, AccessType. Unless an   %
-%       access type is also specified, a predicate will apply to all accesses %
-%       of a specied typed type (e.g., Write vs. Write Sc).                   %
-%                                                                             %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-Axiom "Read_Sc":
-% Read and Write operations following a Read Sc must be ordered after the Read Sc
-% Read to Write order is enforced by default for nomal Reads and Writes
-forall microops "r",
-IsAnyRead r => AccessType Sc r =>
-(forall microops "r'", SameCore r r' /\ IsAnyRead r' /\ ProgramOrder r r' =>
-  AddEdge ((r, Execute), (r', Execute), "read_sc", "orange")).
-
-% Axiom "Write_Sc": N/A
-% Read and Write operations preceding a Write Sc must be ordered before the Write Sc
-% Read-Write and Write-Write order is enforced by default for normal Reads and Writes
-
-Axiom "Sc_TotalOrder":
-% C11 requires a total order on Read Sc and Write Sc operations
-% PO-previous Write Sc operations must reach the MemoryHierachy before a Read Sc executes
-forall microops "r",
-IsAnyRead r => AccessType Sc r =>
-(forall microops "w", SameCore w r /\ IsAnyWrite w /\ AccessType Sc w /\ ProgramOrder w r =>
-  AddEdge ((w, (0, MemoryHierarchy)), (r, Execute), "sc_order", "orange")).
-
-Axiom "Read_Acq":
-% Read and Write operations following a Read Acq must be ordered after the Read Acq
-forall microops "r",
-IsAnyRead r => AccessType Acq r =>
-(forall microops "r'", SameCore r r' /\ IsAnyRead r' /\ ProgramOrder r r' =>
-  AddEdge ((r, Execute), (r', Execute), "read_acq", "orange")).
-
-% Axiom "Write_Rel": N/A
-% Read and Write operations preceding a Write Rel must be ordered before the Write Rel
-% Read-Write and Write-Write order is enforced by default for normal Reads and Writes
-
-% Axiom "Read_Rlx": N/A
-% No extra ordering requirement
-
-% Axiom "Write_Rlx": N/A
-% No extra ordering requirement
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % END MODIFICATION REGION                                                     %

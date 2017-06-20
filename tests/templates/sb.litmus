@@ -6,13 +6,13 @@ C <TEST>
 }
 
 P0 (atomic_int* y, atomic_int* x) {
-
-
+  // store to x
+  int r0 =  // load of y 
 }
 
 P1 (atomic_int* y, atomic_int* x) {
-
-
+  // store to y
+  int r0 =  // load of x
 }
 
 exists (           )
