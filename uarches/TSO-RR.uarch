@@ -54,10 +54,7 @@ AddEdge ((i1, Fetch), (i2, Fetch), "PO", "blue").
 Axiom "Execute_stage_is_in_order":
 forall microops "i1",
 forall microops "i2",
-%
-% your code here
-%
-EdgeExists ((i1, Fetch),  (i2, Fetch), "") =>
+SameCore i1 i2 /\ ~( _____________ /\ _____________ ) /\ EdgeExists ((i1, Fetch),  (i2, Fetch), "") =>
 AddEdge ((i1, Execute), (i2, Execute), "PPO", "darkgreen").
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -196,18 +193,16 @@ AddEdges [((f, Fetch),       (f, Execute),      "path");
 Axiom "Addr_Read_Read_Dependencies":
 forall microops "i1",
 forall microops "i2",
-%
-% your code here
-%
+SameCore i1 i2 /\ _____________ /\ _____________ /\ HasDependency addr i1 i2 =>
+  AddEdge ((i1, _____________), (i2, _____________), "addr_rr_dependency").
 
 %We choose to just model the ctrlisb dependency with a single
 %edge and not explicitly show the branch and isb instructions.
 Axiom "CtrlIsb_Read_Read_Dependencies":
 forall microops "i1",
 forall microops "i2",
-%
-% your code here
-%
+SameCore i1 i2 /\ _____________ /\ _____________ /\ HasDependency ctrlisb i1 i2 =>
+  AddEdge ((i1, _____________), (i2, _____________), "ctrlisb").
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % END MODIFICATION REGION                                                     %
