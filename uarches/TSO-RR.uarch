@@ -24,12 +24,6 @@ StageName 2 "Writeback".
 StageName 3 "StoreBuffer".
 StageName 4 "MemoryHierarchy".
 
-Axiom "Reads_Path":
-forall microops "i",
-IsAnyRead i =>
-AddEdges [((i, Fetch),      (i, Execute),     "path");
-          ((i, Execute),     (i, Writeback),    "path")].
-
 Axiom "Writes_Path":
 forall microops "i",
 IsAnyWrite i =>
@@ -39,6 +33,11 @@ AddEdges [((i, Fetch),      (i, Execute),     "path");
           ((i, StoreBuffer),     (i, (0, MemoryHierarchy)),    "path")
           ].
 
+Axiom "Reads_Path":
+forall microops "i",
+IsAnyRead i =>
+AddEdges [((i, Fetch),      (i, Execute),     "path");
+          ((i, Execute),     (i, Writeback),    "path")].
 
 Axiom "PO_Fetch":
 forall microops "i1",
@@ -79,13 +78,6 @@ IsAnyWrite i1 /\ IsAnyWrite i2 /\ SameCore i1 i2 =>
 EdgeExists ((i1, Writeback),  (i2, Writeback), "") =>
 AddEdge ((i1, StoreBuffer), (i2, StoreBuffer), "PPO", "darkgreen").
 
-Axiom "EnforceWriteOrdering":
-  forall microop "w",
-  forall microop "w'",
-  (IsAnyWrite w /\ IsAnyWrite w' /\ ~SameMicroop w w' /\ SameCore w w') =>
-    EdgeExists ((w, StoreBuffer),  (w', StoreBuffer), "") =>
-      AddEdge ((w, (0, MemoryHierarchy)), (w', StoreBuffer), "one_at_a_time", "green").
-
 Axiom "WriteSerialization":
 forall microops "i1",
 forall microops "i2",
@@ -100,12 +92,16 @@ Axiom "EnforceFinalWrite":
    ~SameMicroop w w' /\ DataFromFinalStateAtPA w') =>
       AddEdge ((w, (0, MemoryHierarchy)), (w', (0, MemoryHierarchy)), "ws_final", "red").
 
-% Constraints on values read by loads follow.
+Axiom "EnforceWriteOrdering":
+  forall microop "w",
+  forall microop "w'",
+  (IsAnyWrite w /\ IsAnyWrite w' /\ ProgramOrder w w') =>
+      AddEdge ((w, (0, MemoryHierarchy)), (w', StoreBuffer), "one_at_a_time", "green").
 
 DefineMacro "STBEmpty":
   % Store buffer is empty for the address we want to read.
   forall microop "w", (
-    (IsAnyWrite w /\ SameCore w i /\ SameVirtualAddress w i /\ ProgramOrder w i) =>
+    (IsAnyWrite w /\ SamePhysicalAddress w i /\ ProgramOrder w i) =>
     AddEdge ((w, (0, MemoryHierarchy)), (i, Execute), "STBEmpty", "purple")).
 
 DefineMacro "BeforeAllWrites":
@@ -162,7 +158,7 @@ DefineMacro "STBFwd":
               ((i, Execute), (w, (0, MemoryHierarchy)), "STBFwd", "purple")]) /\
     % Ensure the STB entry is the latest one.
     ~exists microop "w'",
-    IsAnyWrite w' /\ SameVirtualAddress w w' /\ SameCore w w' /\
+    IsAnyWrite w' /\ SamePhysicalAddress w w' /\
     ProgramOrder w w' /\ ProgramOrder w' i.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -181,7 +177,7 @@ AddEdges [((f, Fetch),       (f, Execute),      "path");
 /\
 (
   forall microops "w",
-    (IsAnyWrite w /\ SameCore w f /\ ProgramOrder w f) =>
+    (IsAnyWrite w /\ ProgramOrder w f) =>
       AddEdge ((w, (0, MemoryHierarchy)), (f, Execute), "fence", "orange")
 ).
 

@@ -43,12 +43,6 @@ StageName 4 "MemoryHierarchy".
 % END MODIFICATION REGION                                                     %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-Axiom "Reads_Path":
-forall microops "i",
-IsAnyRead i =>
-AddEdges [((i, Fetch),      (i, Execute),     "path");
-          ((i, Execute),     (i, Writeback),    "path")].
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % 2. Ensure that writes go through store buffer before reaching memory.       %
 %                                                                             %
@@ -70,6 +64,12 @@ AddEdges [((i, Fetch),      (i, Execute),     "path");
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % END MODIFICATION REGION                                                     %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "Reads_Path":
+forall microops "i",
+IsAnyRead i =>
+AddEdges [((i, Fetch),      (i, Execute),     "path");
+          ((i, Execute),     (i, Writeback),    "path")].
 
 Axiom "PO_Fetch":
 forall microops "i1",
@@ -115,27 +115,6 @@ AddEdge ((i1, StoreBuffer), (i2, StoreBuffer), "PPO", "darkgreen").
 % END MODIFICATION REGION                                                     %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% 4. Ensure that a write is only released from the store buffer after all     %
-%    prior writes from that core have reached memory.                         %
-%                                                                             %
-% Modify the axiom below to enforce that if two writes on the same core go    %
-% through the store buffer in order, then the first write reaches memory      %
-% before the second one can leave the store buffer.                           %
-%                                                                             %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-Axiom "EnforceWriteOrdering":
-  forall microop "w",
-  forall microop "w'",
-  (IsAnyWrite w /\ IsAnyWrite w' /\ ~SameMicroop w w' /\ SameCore w w') =>
-    EdgeExists ((w, StoreBuffer),  (w', StoreBuffer), "") =>
-      AddEdge ((w, (0, MemoryHierarchy)), (w', StoreBuffer), "one_at_a_time", "green").
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% END MODIFICATION REGION                                                     %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 Axiom "WriteSerialization":
 forall microops "i1",
 forall microops "i2",
@@ -150,6 +129,26 @@ Axiom "EnforceFinalWrite":
    ~SameMicroop w w' /\ DataFromFinalStateAtPA w') =>
       AddEdge ((w, (0, MemoryHierarchy)), (w', (0, MemoryHierarchy)), "ws_final", "red").
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 4. Ensure that a write is only released from the store buffer after all     %
+%    prior writes from that core have reached memory.                         %
+%                                                                             %
+% Modify the axiom below to enforce that if a write w is in program order     %
+% before a write w', then the first write (w) reaches memory before the       %
+% second one (w') can leave the store buffer.                                 %
+%                                                                             %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Axiom "EnforceWriteOrdering":
+  forall microop "w",
+  forall microop "w'",
+  (IsAnyWrite w /\ IsAnyWrite w' /\ ProgramOrder w w') =>
+      AddEdge ((w, (0, MemoryHierarchy)), (w', StoreBuffer), "one_at_a_time", "green").
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% END MODIFICATION REGION                                                     %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 % Constraints on values read by loads follow.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -157,8 +156,8 @@ Axiom "EnforceFinalWrite":
 %    has no entries for the address of the load.                              %
 %                                                                             %
 % Create a macro below to enforce that all writes before an instruction "i"   %
-% in program order have reached memory before the Execute stage of            %
-% instruction "i".                                                            %
+% in program order that write to the address of "i" have reached memory       %
+% before the Execute stage of instruction "i".                                %                           %
 %                                                                             %
 % Remember that since this is a macro, it will not affect execution unless it %
 % is included in an axiom through the use of "ExpandMacro <macro name>".      %
@@ -171,7 +170,7 @@ Axiom "EnforceFinalWrite":
 DefineMacro "STBEmpty":
   % Store buffer is empty for the address we want to read.
   forall microop "w", (
-    (IsAnyWrite w /\ SameCore w i /\ SameVirtualAddress w i /\ ProgramOrder w i) =>
+    (IsAnyWrite w /\ SamePhysicalAddress w i /\ ProgramOrder w i) =>
     AddEdge ((w, (0, MemoryHierarchy)), (i, Execute), "STBEmpty", "purple")).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -217,10 +216,10 @@ DefineMacro "No_SameAddrWrites_Btwn_Src_And_Read":
 % store buffer has no entries for the address of the load (by expanding the   %
 % STBEmpty macro).                                                            %
 %                                                                             %
-% If you decide to do the Advanced portion of this hands-on (reading your own %
-% write early), include the macro detailing forwarding from the store buffer  %
-% as an alternate option to the cases of reading from memory that are         %
-% currently below.                                                            %
+% If you decide to do the Advanced portion of this hands-on (store buffer     %
+% forwarding), uncomment the macro expansion detailing forwarding from the    %
+% store buffer as an alternate option to the cases of reading from memory     %
+% that are currently below.                                                   %        %
 %                                                                             %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -228,6 +227,7 @@ Axiom "Read_Values":
 forall microops "i",
 IsAnyRead i =>
 (
+% Uncomment the commented lines if you add the (advanced) store buffer forwarding.
   ExpandMacro STBFwd \/
   (
        ExpandMacro STBEmpty /\
@@ -277,7 +277,7 @@ DefineMacro "STBFwd":
               ((i, Execute), (w, (0, MemoryHierarchy)), "STBFwd", "purple")]) /\
     % Ensure the STB entry is the latest one.
     ~exists microop "w'",
-    IsAnyWrite w' /\ SameVirtualAddress w w' /\ SameCore w w' /\
+    IsAnyWrite w' /\ SamePhysicalAddress w w' /\
     ProgramOrder w w' /\ ProgramOrder w' i.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -295,9 +295,6 @@ DefineMacro "STBFwd":
 % ensure that all writes prior to the fence in program order must reach       %
 % memory before the Execute stage of the fence.                               %
 %                                                                             %
-% Hint: You can use the predicate "IsAnyFence <instr identifier>" to check    %
-%       whether an instruction is a fence or not.                             %
-%                                                                             %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 Axiom "Fence_Ordering":
@@ -308,36 +305,9 @@ AddEdges [((f, Fetch),       (f, Execute),      "path");
 /\
 (
   forall microops "w",
-    (IsAnyWrite w /\ SameCore w f /\ ProgramOrder w f) =>
+    (IsAnyWrite w /\ ProgramOrder w f) =>
       AddEdge ((w, (0, MemoryHierarchy)), (f, Execute), "fence", "orange")
 ).
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% END MODIFICATION REGION                                                     %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%                                                                             %
-% 7. (Extra) Implement a fence operation that flushes all prior writes to     %
-%    memory before any succeeding instructions can perform.                   %
-%                                                                             %
-% Add an axiom below detailing the operations of a fence instruction which    %
-% can be used for synchronization between threads. The fence should have      %
-% three stages: Fetch, Execute, and Writeback. In addition, the fence should  %
-% ensure that all writes prior to the fence in program order must reach       %
-% memory before the Execute stage of the fence.                               %
-%                                                                             %
-% Hint: You can use the predicate "IsAnyFence <instr identifier>" to check    %
-%       whether an instruction is a fence or not.                             %
-%                                                                             %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-Axiom "SC_Order":
-forall microops "r",
-OnCore c r =>
-IsAnyRead r => AccessType Sc r =>
-(forall microops "w", IsAnyWrite w /\ AccessType Sc w /\ SameCore w r /\ ProgramOrder w r =>
-  AddEdge ((w, (0, MemoryHierarchy)), (r, Execute), "sc_order", "orange")).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % END MODIFICATION REGION                                                     %
